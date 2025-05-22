@@ -1,4 +1,5 @@
 # My tasks
 
-- [ ] Task 1 @5h
-- [ ] Task 2 @1h
+- [ ] Implement basic POC @10m
+- [ ] Parse fractional hours @30m
+- [ ] Parse time ranges @1h
