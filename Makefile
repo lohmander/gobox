@@ -3,7 +3,11 @@ BUILD_DIR=build
 
 all: build
 
-build:
+test:
+	@echo "Running tests..."
+	go test ./... -v
+
+build: test
 	@echo "Building $(BINARY_NAME)..."
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/$(BINARY_NAME)/main.go
 	@echo "Build complete. Binary in $(BUILD_DIR)/$(BINARY_NAME)"
