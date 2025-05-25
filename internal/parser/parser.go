@@ -3,6 +3,7 @@ package parser
 import (
 	"bufio"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"regexp"
 	"strconv"
@@ -80,7 +81,7 @@ func ParseTimeBox(timeBox string) (time.Duration, time.Time, error) {
 			return 0, time.Time{}, fmt.Errorf("invalid time range format: %s. Expected [HH:MM-HH:MM]", timeBox)
 		}
 
-		// startStr := strings.TrimSpace(parts[0])
+		// startStr := strings.TrimSpace(parts[0]) // Removed as it's not currently used
 		endStr := strings.TrimSpace(parts[1])
 
 		now := time.Now()
@@ -131,9 +132,9 @@ func ParseTimeBox(timeBox string) (time.Duration, time.Time, error) {
 	return 0, time.Time{}, fmt.Errorf("unsupported timebox format: %s. Expected @1h, @30m, @1h30m or @[HH:MM-HH:MM]", timeBox)
 }
 
-// UpdateMarkdown checks the task and adds commits to the markdown file.
-func UpdateMarkdown(filename string, task task.Task, commits []string) error {
-	content, err := os.ReadFile(filename)
+// UpdateMarkdown checks the task, adds commits, and records actual time spent to the markdown file.
+func UpdateMarkdown(filename string, task task.Task, commits []string, startTime, endTime time.Time) error {
+	content, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return fmt.Errorf("failed to read file %s: %w", filename, err)
 	}
@@ -148,6 +149,14 @@ func UpdateMarkdown(filename string, task task.Task, commits []string) error {
 	updatedLine := strings.Replace(originalLine, "- [ ]", "- [x]", 1)
 	lines[task.LineNumber-1] = updatedLine
 
+	// Prepare time tracking lines
+	var timeLines []string
+	if !startTime.IsZero() && !endTime.IsZero() {
+		duration := endTime.Sub(startTime)
+		timeLines = append(timeLines, fmt.Sprintf("    * Completed: %s", endTime.Format("2006-01-02 15:04 MST")))
+		timeLines = append(timeLines, fmt.Sprintf("    * Duration: %s", duration.Round(time.Second).String()))
+	}
+
 	// Prepare commits to be inserted
 	var commitLines []string
 	if len(commits) > 0 {
@@ -157,12 +166,13 @@ func UpdateMarkdown(filename string, task task.Task, commits []string) error {
 		}
 	}
 
-	// Insert commit lines right after the updated task line
-	newLines := make([]string, 0, len(lines)+len(commitLines))
+	// Insert time and commit lines right after the updated task line
+	newLines := make([]string, 0, len(lines)+len(timeLines)+len(commitLines))
 	newLines = append(newLines, lines[:task.LineNumber]...)
+	newLines = append(newLines, timeLines...)
 	newLines = append(newLines, commitLines...)
 	newLines = append(newLines, lines[task.LineNumber:]...)
 
 	newContent := strings.Join(newLines, "\n")
-	return os.WriteFile(filename, []byte(newContent), 0644)
+	return ioutil.WriteFile(filename, []byte(newContent), 0644)
 }
