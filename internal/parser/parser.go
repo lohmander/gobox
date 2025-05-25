@@ -10,10 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"gobox/pkg/task" // Import the Task struct from our pkg/task package
+	"gobox/pkg/task" // Import the Task struct
 )
 
-// parseMarkdown reads the markdown file and extracts tasks with time boxes.
+// ParseMarkdownFile reads the markdown file and extracts tasks with time boxes.
+// This function uses a line-by-line regex approach to reliably capture line numbers
+// and original line content, which is essential for updating the markdown file.
 func ParseMarkdownFile(filename string) ([]task.Task, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -46,7 +48,7 @@ func ParseMarkdownFile(filename string) ([]task.Task, error) {
 				Description:  description,
 				TimeBox:      timeBox,
 				LineNumber:   lineNumber,
-				OriginalLine: line,
+				OriginalLine: line, // Directly capture the original line
 				IsChecked:    isChecked,
 			})
 		}
@@ -81,11 +83,9 @@ func ParseTimeBox(timeBox string) (time.Duration, time.Time, error) {
 			return 0, time.Time{}, fmt.Errorf("invalid time range format: %s. Expected [HH:MM-HH:MM]", timeBox)
 		}
 
-		// startStr := strings.TrimSpace(parts[0]) // Removed as it's not currently used
 		endStr := strings.TrimSpace(parts[1])
 
 		now := time.Now()
-		// Parse end time relative to today
 		endTime, err := time.Parse("15:04", endStr)
 		if err != nil {
 			return 0, time.Time{}, fmt.Errorf("invalid end time format in %s: %w", timeBox, err)
@@ -103,8 +103,6 @@ func ParseTimeBox(timeBox string) (time.Duration, time.Time, error) {
 	}
 
 	// Assume duration syntax: 1h, 30m, 1h30m
-	// Custom parsing for "1h30m" as time.ParseDuration doesn't handle "1h30m" directly
-	// but needs "1h30m0s" or similar.
 	var totalDuration time.Duration
 	reDuration := regexp.MustCompile(`^(\d+h)?(\d+m)?$`)
 	matches := reDuration.FindStringSubmatch(timeBox)
