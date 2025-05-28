@@ -1,64 +1,81 @@
 package parser
 
 import (
-	"bufio"
+	"bytes"
 	"fmt"
 	"io/ioutil"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"gobox/pkg/task" // Import the Task struct
+	"gobox/pkg/task"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/text"
 )
 
 // ParseMarkdownFile reads the markdown file and extracts tasks with time boxes.
-// This function uses a line-by-line regex approach to reliably capture line numbers
-// and original line content, which is essential for updating the markdown file.
 func ParseMarkdownFile(filename string) ([]task.Task, error) {
-	file, err := os.Open(filename)
+	content, err := ioutil.ReadFile(filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file %s: %w", filename, err)
+		return nil, fmt.Errorf("failed to read file %s: %w", filename, err)
 	}
-	defer file.Close()
+
+	// Create a Goldmark Markdown parser
+	md := goldmark.New()
+	reader := text.NewReader(content)
+	rootNode := md.Parser().Parse(reader)
 
 	var tasks []task.Task
-	scanner := bufio.NewScanner(file)
 	lineNumber := 0
 
-	// Regex to match checklist items and optionally capture timebox syntax.
-	// Group 1: ' ' or 'x' (for checked/unchecked)
-	// Group 2: Task description
-	// Group 3: Full timebox string (e.g., "@1h", "@[10:00-13:00]")
-	// Group 4: Timebox content (e.g., "1h", "10:00-13:00")
+	// Regex to match checklist items and optionally capture timebox syntax
 	re := regexp.MustCompile(`^- \[( |x)\]\s*(.*?)\s*(@(\d+[mh]?|\d+h\d+m|\[\d{2}:\d{2}-\d{2}:\d{2}\]))?\s*$`)
 
-	for scanner.Scan() {
-		lineNumber++
-		line := scanner.Text()
-		matches := re.FindStringSubmatch(line)
-
-		if len(matches) > 0 {
-			isChecked := matches[1] == "x"
-			description := strings.TrimSpace(matches[2])
-			timeBox := strings.TrimSpace(matches[3]) // This will be empty if no timebox is present
-
-			tasks = append(tasks, task.Task{
-				Description:  description,
-				TimeBox:      timeBox,
-				LineNumber:   lineNumber,
-				OriginalLine: line, // Directly capture the original line
-				IsChecked:    isChecked,
-			})
+	// Traverse the AST to find list items
+	ast.Walk(rootNode, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
 		}
-	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading file %s: %w", filename, err)
-	}
+		if listItem, ok := node.(*ast.ListItem); ok {
+			lineNumber++
+			text := extractText(listItem, content)
+
+			matches := re.FindStringSubmatch(text)
+			if len(matches) > 0 {
+				isChecked := matches[1] == "x"
+				description := strings.TrimSpace(matches[2])
+				timeBox := strings.TrimSpace(matches[3]) // This will be empty if no timebox is present
+
+				tasks = append(tasks, task.Task{
+					Description:  description,
+					TimeBox:      timeBox,
+					LineNumber:   lineNumber,
+					OriginalLine: text,
+					IsChecked:    isChecked,
+				})
+			}
+		}
+
+		return ast.WalkContinue, nil
+	})
 
 	return tasks, nil
+}
+
+// extractText extracts the plain text content from a Markdown node.
+func extractText(node ast.Node, content []byte) string {
+	var buf bytes.Buffer
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if textNode, ok := n.(*ast.Text); ok && entering {
+			buf.Write(textNode.Segment.Value(content))
+		}
+		return ast.WalkContinue, nil
+	})
+	return buf.String()
 }
 
 // ParseTimeBox parses the timebox string into a duration or an end time.
@@ -130,47 +147,55 @@ func ParseTimeBox(timeBox string) (time.Duration, time.Time, error) {
 	return 0, time.Time{}, fmt.Errorf("unsupported timebox format: %s. Expected @1h, @30m, @1h30m or @[HH:MM-HH:MM]", timeBox)
 }
 
-// UpdateMarkdown checks the task, adds commits, and records actual time spent to the markdown file.
+// UpdateMarkdown updates the task, adds commits, and records actual time spent in the markdown file.
 func UpdateMarkdown(filename string, task task.Task, commits []string, startTime, endTime time.Time) error {
 	content, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return fmt.Errorf("failed to read file %s: %w", filename, err)
 	}
 
-	lines := strings.Split(string(content), "\n")
-	if task.LineNumber <= 0 || task.LineNumber > len(lines) {
-		return fmt.Errorf("invalid line number %d for task '%s'", task.LineNumber, task.Description)
-	}
+	// Create a Goldmark Markdown parser
+	md := goldmark.New()
+	reader := text.NewReader(content)
+	rootNode := md.Parser().Parse(reader)
 
-	// Update the task line to be checked
-	originalLine := lines[task.LineNumber-1]
-	updatedLine := strings.Replace(originalLine, "- [ ]", "- [x]", 1)
-	lines[task.LineNumber-1] = updatedLine
+	var buffer bytes.Buffer
+	lineNumber := 0
 
-	// Prepare time tracking lines
-	var timeLines []string
-	if !startTime.IsZero() && !endTime.IsZero() {
-		duration := endTime.Sub(startTime)
-		timeLines = append(timeLines, fmt.Sprintf("    * Completed: %s", endTime.Format("2006-01-02 15:04 MST")))
-		timeLines = append(timeLines, fmt.Sprintf("    * Duration: %s", duration.Round(time.Second).String()))
-	}
+	// Traverse the AST to find and update the target task
+	ast.Walk(rootNode, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if listItem, ok := node.(*ast.ListItem); ok {
+			lineNumber++
+			text := extractText(listItem, content)
 
-	// Prepare commits to be inserted
-	var commitLines []string
-	if len(commits) > 0 {
-		commitLines = append(commitLines, "    * Commits during task:")
-		for _, commit := range commits {
-			commitLines = append(commitLines, fmt.Sprintf("        - %s", commit))
+			if text == task.OriginalLine {
+				// Update the task line to be checked
+				updatedLine := strings.Replace(text, "- [ ]", "- [x]", 1)
+				buffer.WriteString(updatedLine + "\n")
+
+				// Add time tracking and commit lines
+				if !startTime.IsZero() && !endTime.IsZero() {
+					duration := endTime.Sub(startTime)
+					buffer.WriteString(fmt.Sprintf("    * Completed: %s\n", endTime.Format("2006-01-02 15:04 MST")))
+					buffer.WriteString(fmt.Sprintf("    * Duration: %s\n", duration.Round(time.Second).String()))
+				}
+				if len(commits) > 0 {
+					buffer.WriteString("    * Commits during task:\n")
+					for _, commit := range commits {
+						buffer.WriteString(fmt.Sprintf("        - %s\n", commit))
+					}
+				}
+				return ast.WalkSkipChildren, nil
+			}
 		}
-	}
 
-	// Insert time and commit lines right after the updated task line
-	newLines := make([]string, 0, len(lines)+len(timeLines)+len(commitLines))
-	newLines = append(newLines, lines[:task.LineNumber]...)
-	newLines = append(newLines, timeLines...)
-	newLines = append(newLines, commitLines...)
-	newLines = append(newLines, lines[task.LineNumber:]...)
+		// Render the original content for other nodes
+		if entering {
+			buffer.Write(content[node.Lines().At(0).Start:node.Lines().At(0).Stop])
+		}
+		return ast.WalkContinue, nil
+	})
 
-	newContent := strings.Join(newLines, "\n")
-	return ioutil.WriteFile(filename, []byte(newContent), 0644)
+	// Write the updated content back to the file
+	return ioutil.WriteFile(filename, buffer.Bytes(), 0644)
 }
