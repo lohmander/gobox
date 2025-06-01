@@ -3,7 +3,7 @@ package parser
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,26 +13,28 @@ import (
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	east "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 )
 
 // ParseMarkdownFile reads the markdown file and extracts tasks with time boxes.
 func ParseMarkdownFile(filename string) ([]task.Task, error) {
-	content, err := ioutil.ReadFile(filename)
+	content, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", filename, err)
 	}
 
 	// Create a Goldmark Markdown parser
-	md := goldmark.New()
+	md := goldmark.New(goldmark.WithExtensions(extension.TaskList))
 	reader := text.NewReader(content)
 	rootNode := md.Parser().Parse(reader)
 
 	var tasks []task.Task
-	lineNumber := 0
+	// lineNumber := 0
 
 	// Regex to match checklist items and optionally capture timebox syntax
-	re := regexp.MustCompile(`^- \[( |x)\]\s*(.*?)\s*(@(\d+[mh]?|\d+h\d+m|\[\d{2}:\d{2}-\d{2}:\d{2}\]))?\s*$`)
+	re := regexp.MustCompile(`(@(\d+[mh]?|\d+h\d+m|\[\d{2}:\d{2}-\d{2}:\d{2}\]))?\s*$`)
 
 	// Traverse the AST to find list items
 	ast.Walk(rootNode, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -40,23 +42,17 @@ func ParseMarkdownFile(filename string) ([]task.Task, error) {
 			return ast.WalkContinue, nil
 		}
 
-		if listItem, ok := node.(*ast.ListItem); ok {
-			lineNumber++
-			text := extractText(listItem, content)
-
-			matches := re.FindStringSubmatch(text)
-			if len(matches) > 0 {
-				isChecked := matches[1] == "x"
-				description := strings.TrimSpace(matches[2])
-				timeBox := strings.TrimSpace(matches[3]) // This will be empty if no timebox is present
+		if check, ok := node.(*east.TaskCheckBox); ok {
+			if text, ok := node.NextSibling().(*ast.Text); ok {
+				itemText := strings.TrimSpace(string(text.Value(content)))
+				matches := re.FindSubmatch(text.Value(content))
+				timeBox := strings.TrimSpace(string(matches[0]))
 
 				tasks = append(tasks, task.Task{
-					Description:  description,
-					TimeBox:      timeBox,
-					LineNumber:   lineNumber,
-					OriginalLine: text,
-					IsChecked:    isChecked,
+					Description: itemText,
+					TimeBox:     timeBox,
 				})
+				fmt.Printf("Node type: %T <-> %T: %s, %s\n", check, text, string(text.Value(content)), matches[0])
 			}
 		}
 
@@ -149,7 +145,7 @@ func ParseTimeBox(timeBox string) (time.Duration, time.Time, error) {
 
 // UpdateMarkdown updates the task, adds commits, and records actual time spent in the markdown file.
 func UpdateMarkdown(filename string, task task.Task, commits []string, startTime, endTime time.Time) error {
-	content, err := ioutil.ReadFile(filename)
+	content, err := os.ReadFile(filename)
 	if err != nil {
 		return fmt.Errorf("failed to read file %s: %w", filename, err)
 	}
@@ -197,5 +193,5 @@ func UpdateMarkdown(filename string, task task.Task, commits []string, startTime
 	})
 
 	// Write the updated content back to the file
-	return ioutil.WriteFile(filename, buffer.Bytes(), 0644)
+	return os.WriteFile(filename, buffer.Bytes(), 0644)
 }
