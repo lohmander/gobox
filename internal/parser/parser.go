@@ -19,6 +19,19 @@ import (
 	"github.com/yuin/goldmark/text"
 )
 
+func extractTextSkippingNode(n ast.Node, skip ast.Node, content []byte, builder *strings.Builder) {
+	if n == skip {
+		return
+	}
+	if t, ok := n.(*ast.Text); ok {
+		builder.Write(t.Segment.Value(content))
+	} else {
+		for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+			extractTextSkippingNode(c, skip, content, builder)
+		}
+	}
+}
+
 func ExtractTask(node ast.Node, content []byte) (*task.Task, bool) {
 	re := regexp.MustCompile(`(@(\d+h\d+m|\d+h|\d+m))\s*$`)
 
@@ -30,21 +43,9 @@ func ExtractTask(node ast.Node, content []byte) (*task.Task, bool) {
 
 		var descBuilder strings.Builder
 
-		// Helper to recursively extract text from inline nodes
-		var extractText func(n ast.Node)
-		extractText = func(n ast.Node) {
-			if t, ok := n.(*ast.Text); ok {
-				descBuilder.Write(t.Segment.Value(content))
-			} else {
-				for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-					extractText(c)
-				}
-			}
-		}
-
-		// Extract text from all siblings after the checkbox
-		for sibling := check.NextSibling(); sibling != nil; sibling = sibling.NextSibling() {
-			extractText(sibling)
+		// Extract text from all children of the list item, skipping the checkbox
+		for c := listItem.FirstChild(); c != nil; c = c.NextSibling() {
+			extractTextSkippingNode(c, check, content, &descBuilder)
 		}
 
 		descText := strings.TrimSpace(descBuilder.String())
@@ -199,7 +200,7 @@ func UpdateMarkdown(
 		if parsedTask, ok := ExtractTask(n, content); ok {
 			if parsedTask.Hash() == updatedTask.Hash() {
 				p := FindParentListItem(n)
-				prev := p.Lines().At(0)
+				prev := p.FirstChild().Lines().At(0)
 				startIndex := rewriter.LineIndexOfByte(prev.Start)
 				endIndex := rewriter.LineIndexOfByte(prev.Stop)
 
@@ -239,7 +240,7 @@ func UpdateMarkdown(
 func FindParentListItem(n ast.Node) ast.Node {
 	if parent := n.Parent(); parent != nil {
 		if parent.Kind() == ast.KindListItem {
-			return parent.FirstChild()
+			return parent
 		}
 		return FindParentListItem(parent)
 	}
