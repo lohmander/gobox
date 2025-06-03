@@ -3,6 +3,7 @@ package parser_test
 import (
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,5 +141,54 @@ func TestParseTimeBox(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestUpdateMarkdown(t *testing.T) {
+	original := "- [ ] Task 1 @1h\n- [ ] Task 2 @2h\n"
+	tmpFile, err := createTempFileWithContent(original)
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	// Parse tasks to get the one we want to update
+	tasks, err := parser.ParseMarkdownFile(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("ParseMarkdownFile failed: %v", err)
+	}
+	if len(tasks) < 1 {
+		t.Fatalf("expected at least one task")
+	}
+
+	// Update the first task: mark as checked and change description
+	updated := tasks[0]
+	updated.IsChecked = true
+	updated.Description = "Task 1"
+	updated.TimeBox = "@1h"
+
+	// Simulate a duration
+	start := time.Now()
+	end := start.Add(1 * time.Hour)
+
+	err = parser.UpdateMarkdown(tmpFile.Name(), updated, nil, start, end)
+	if err != nil {
+		t.Fatalf("UpdateMarkdown failed: %v", err)
+	}
+
+	// Read back the file and check the update
+	updatedContent, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("failed to read updated file: %v", err)
+	}
+	updatedStr := string(updatedContent)
+	if !strings.Contains(updatedStr, "[x] Task 1 @1h") {
+		t.Errorf("updated task not found or incorrect: %q", updatedStr)
+	}
+	if !strings.Contains(updatedStr, "⏱️ 1h 0m 0s") {
+		t.Errorf("duration not found or incorrect: %q", updatedStr)
+	}
+	if !strings.Contains(updatedStr, "- [ ] Task 2 @2h") {
+		t.Errorf("other tasks should remain unchanged: %q", updatedStr)
 	}
 }
