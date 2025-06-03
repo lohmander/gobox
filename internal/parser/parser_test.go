@@ -17,7 +17,64 @@ func TestParseMarkdownFile(t *testing.T) {
 		want     []task.Task
 		wantErr  bool
 	}{
-		// Add test cases here
+		{
+			name:     "empty file",
+			markdown: "",
+			want:     []task.Task{},
+			wantErr:  false,
+		},
+		{
+			name:     "single unchecked task",
+			markdown: "- [ ] Task 1 @1h",
+			want: []task.Task{
+				{
+					Description: "Task 1",
+					TimeBox:     "@1h",
+					IsChecked:   false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:     "single checked task",
+			markdown: "- [x] Task 2 @2h",
+			want: []task.Task{
+				{
+					Description: "Task 2",
+					TimeBox:     "@2h",
+					IsChecked:   true,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:     "multiple tasks",
+			markdown: "- [ ] Task 1 @1h\n- [x] Task 2 @30m\n- [ ] Task 3",
+			want: []task.Task{
+				{
+					Description: "Task 1",
+					TimeBox:     "@1h",
+					IsChecked:   false,
+				},
+				{
+					Description: "Task 2",
+					TimeBox:     "@30m",
+					IsChecked:   true,
+				},
+				{
+					Description: "Task 3",
+					TimeBox:     "",
+					IsChecked:   false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:     "regular list items",
+			markdown: "- Task without checkbox",
+			want:     []task.Task{},
+			wantErr:  false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -34,7 +91,7 @@ func TestParseMarkdownFile(t *testing.T) {
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("ParseMarkdownFile() got = %v, want %v", got, tt.want)
+				t.Errorf("ParseMarkdownFile() got = %T %v, want %T %v", got, got, tt.want, tt.want)
 			}
 		})
 	}

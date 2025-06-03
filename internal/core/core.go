@@ -211,8 +211,11 @@ func StartGoBox(markdownFile string) {
 		commitsDuringTask = append(commitsDuringTask, commitLine)
 	}
 
+	nextTask.IsChecked = true // Mark the task as completed
+
 	// Update the markdown file, passing startTime and finalEndTime
 	err = parser.UpdateMarkdown(markdownFile, *nextTask, commitsDuringTask, startTime, finalEndTime) // Use parser package
+
 	if err != nil {
 		fmt.Printf("Error updating markdown file: %v\n", err)
 		os.Exit(1)

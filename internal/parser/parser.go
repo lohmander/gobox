@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"gobox/internal/rewrite"
 	"gobox/pkg/task"
 
 	"github.com/yuin/goldmark"
@@ -17,6 +18,56 @@ import (
 	east "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 )
+
+func ExtractTask(node ast.Node, content []byte) (*task.Task, bool) {
+	re := regexp.MustCompile(`(@(\d+h\d+m|\d+h|\d+m))\s*$`)
+
+	if check, ok := node.(*east.TaskCheckBox); ok {
+		listItem := FindParentListItem(check)
+		if listItem == nil {
+			return nil, false
+		}
+
+		var descBuilder strings.Builder
+
+		// Helper to recursively extract text from inline nodes
+		var extractText func(n ast.Node)
+		extractText = func(n ast.Node) {
+			if t, ok := n.(*ast.Text); ok {
+				descBuilder.Write(t.Segment.Value(content))
+			} else {
+				for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+					extractText(c)
+				}
+			}
+		}
+
+		// Extract text from all siblings after the checkbox
+		for sibling := check.NextSibling(); sibling != nil; sibling = sibling.NextSibling() {
+			extractText(sibling)
+		}
+
+		descText := strings.TrimSpace(descBuilder.String())
+
+		matches := re.FindSubmatch([]byte(descText))
+		timeBox := ""
+
+		if len(matches) > 1 {
+			timeBox = string(matches[1]) // the full `@25m` or `@[10:00-11:00]`
+		}
+
+		itemText := strings.TrimSuffix(descText, timeBox)
+		itemText = strings.TrimSpace(itemText)
+
+		return &task.Task{
+			Description: itemText,
+			TimeBox:     timeBox,
+			IsChecked:   check.IsChecked,
+		}, true
+	}
+
+	return nil, false
+}
 
 // ParseMarkdownFile reads the markdown file and extracts tasks with time boxes.
 func ParseMarkdownFile(filename string) ([]task.Task, error) {
@@ -30,11 +81,7 @@ func ParseMarkdownFile(filename string) ([]task.Task, error) {
 	reader := text.NewReader(content)
 	rootNode := md.Parser().Parse(reader)
 
-	var tasks []task.Task
-	// lineNumber := 0
-
-	// Regex to match checklist items and optionally capture timebox syntax
-	re := regexp.MustCompile(`(@(\d+[mh]?|\d+h\d+m|\[\d{2}:\d{2}-\d{2}:\d{2}\]))?\s*$`)
+	tasks := []task.Task{}
 
 	// Traverse the AST to find list items
 	ast.Walk(rootNode, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -42,36 +89,14 @@ func ParseMarkdownFile(filename string) ([]task.Task, error) {
 			return ast.WalkContinue, nil
 		}
 
-		if check, ok := node.(*east.TaskCheckBox); ok {
-			if text, ok := node.NextSibling().(*ast.Text); ok {
-				itemText := strings.TrimSpace(string(text.Value(content)))
-				matches := re.FindSubmatch(text.Value(content))
-				timeBox := strings.TrimSpace(string(matches[0]))
-
-				tasks = append(tasks, task.Task{
-					Description: itemText,
-					TimeBox:     timeBox,
-				})
-				fmt.Printf("Node type: %T <-> %T: %s, %s\n", check, text, string(text.Value(content)), matches[0])
-			}
+		if task, ok := ExtractTask(node, content); ok {
+			tasks = append(tasks, *task)
 		}
 
 		return ast.WalkContinue, nil
 	})
 
 	return tasks, nil
-}
-
-// extractText extracts the plain text content from a Markdown node.
-func extractText(node ast.Node, content []byte) string {
-	var buf bytes.Buffer
-	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
-		if textNode, ok := n.(*ast.Text); ok && entering {
-			buf.Write(textNode.Segment.Value(content))
-		}
-		return ast.WalkContinue, nil
-	})
-	return buf.String()
 }
 
 // ParseTimeBox parses the timebox string into a duration or an end time.
@@ -144,54 +169,79 @@ func ParseTimeBox(timeBox string) (time.Duration, time.Time, error) {
 }
 
 // UpdateMarkdown updates the task, adds commits, and records actual time spent in the markdown file.
-func UpdateMarkdown(filename string, task task.Task, commits []string, startTime, endTime time.Time) error {
+func UpdateMarkdown(
+	filename string,
+	updatedTask task.Task,
+	commits []string,
+	startTime, endTime time.Time,
+) error {
 	content, err := os.ReadFile(filename)
 	if err != nil {
 		return fmt.Errorf("failed to read file %s: %w", filename, err)
 	}
 
-	// Create a Goldmark Markdown parser
-	md := goldmark.New()
+	// Parse into AST
+	md := goldmark.New(goldmark.WithExtensions(extension.TaskList))
 	reader := text.NewReader(content)
 	rootNode := md.Parser().Parse(reader)
 
-	var buffer bytes.Buffer
-	lineNumber := 0
+	// Create a new scanner rewriter to modify the content
+	rewriter := rewrite.NewScannerRewriter(
+		bytes.NewReader(content),
+		rewrite.BuildLineOffsets(content),
+	)
 
-	// Traverse the AST to find and update the target task
-	ast.Walk(rootNode, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-		if listItem, ok := node.(*ast.ListItem); ok {
-			lineNumber++
-			text := extractText(listItem, content)
+	err = ast.Walk(rootNode, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering {
+			return ast.WalkContinue, nil
+		}
 
-			if text == task.OriginalLine {
-				// Update the task line to be checked
-				updatedLine := strings.Replace(text, "- [ ]", "- [x]", 1)
-				buffer.WriteString(updatedLine + "\n")
+		if parsedTask, ok := ExtractTask(n, content); ok {
+			if parsedTask.Hash() == updatedTask.Hash() {
+				p := FindParentListItem(n)
+				prev := p.Lines().At(0)
+				startIndex := rewriter.LineIndexOfByte(prev.Start)
+				endIndex := rewriter.LineIndexOfByte(prev.Stop)
 
-				// Add time tracking and commit lines
+				var taskText [][]byte
+
+				taskText = append(taskText, []byte(updatedTask.String()))
+
+				// Add actual duration if both startTime and endTime are set
 				if !startTime.IsZero() && !endTime.IsZero() {
 					duration := endTime.Sub(startTime)
-					buffer.WriteString(fmt.Sprintf("    * Completed: %s\n", endTime.Format("2006-01-02 15:04 MST")))
-					buffer.WriteString(fmt.Sprintf("    * Duration: %s\n", duration.Round(time.Second).String()))
+					hours := int(duration.Hours())
+					minutes := int(duration.Minutes()) % 60
+					seconds := int(duration.Seconds()) % 60
+					duration = time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute + time.Duration(seconds)*time.Second
+					durationStr := fmt.Sprintf("  ⏱️ %dh %dm %ds", hours, minutes, seconds)
+					taskText = append(taskText, []byte(durationStr))
 				}
-				if len(commits) > 0 {
-					buffer.WriteString("    * Commits during task:\n")
-					for _, commit := range commits {
-						buffer.WriteString(fmt.Sprintf("        - %s\n", commit))
-					}
-				}
-				return ast.WalkSkipChildren, nil
+
+				rewriter.CopyLinesUntil(startIndex)
+
+				// Replace the task item with the updated task
+				rewriter.ReplaceLines(startIndex, endIndex, taskText)
 			}
 		}
 
-		// Render the original content for other nodes
-		if entering {
-			buffer.Write(content[node.Lines().At(0).Start:node.Lines().At(0).Stop])
-		}
 		return ast.WalkContinue, nil
 	})
 
-	// Write the updated content back to the file
-	return os.WriteFile(filename, buffer.Bytes(), 0644)
+	if err := rewriter.CopyRemainingLines(); err != nil {
+		return fmt.Errorf("failed to copy remaining lines: %w", err)
+	}
+
+	// Finally, write out the buffer
+	return os.WriteFile(filename, rewriter.Bytes(), 0644)
+}
+
+func FindParentListItem(n ast.Node) ast.Node {
+	if parent := n.Parent(); parent != nil {
+		if parent.Kind() == ast.KindListItem {
+			return parent.FirstChild()
+		}
+		return FindParentListItem(parent)
+	}
+	return nil
 }
