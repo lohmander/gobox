@@ -48,10 +48,14 @@ var tuiCmd = &cobra.Command{
 
 		tasks := make([]TaskItem, 0, len(parsedTasks))
 		for _, t := range parsedTasks {
+			if t.IsChecked {
+				continue // Skip checked tasks in the TUI
+			}
+
 			line := fmt.Sprintf("%s %s", t.Description, t.TimeBox)
 			tasks = append(tasks, TaskItem{line: line, task: t})
 		}
-		p := tea.NewProgram(initialModel(tasks))
+		p := tea.NewProgram(initialModel(tasks, markdownFile))
 
 		if _, err := p.Run(); err != nil {
 			fmt.Println("Error running TUI:", err)
@@ -81,13 +85,13 @@ type model struct {
 	timerDone   bool
 }
 
-func initialModel(tasks []TaskItem) model {
+func initialModel(tasks []TaskItem, markdownFile string) model {
 	items := make([]list.Item, len(tasks))
 	for i, t := range tasks {
 		items[i] = t
 	}
 	l := list.New(items, list.NewDefaultDelegate(), 40, 10)
-	l.Title = "GoBox Tasks"
+	l.Title = markdownFile // Store the file path in the title for reloads
 	return model{list: l}
 }
 
@@ -117,8 +121,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		} else if m.timerDone {
-			// Any key returns to list UI after completion message
+			// Mark the task as checked in the Markdown file
+			updated := m.timerTask.task
+			updated.IsChecked = true
+			err := parser.UpdateMarkdown(m.list.Title, updated, nil, m.timerTotal)
+			if err != nil {
+				fmt.Println("Error updating markdown:", err)
+			}
 			m.timerDone = false
+			// Reload tasks from markdown file
+			if m.list.Title != "" {
+				parsedTasks, err := parser.ParseMarkdownFile(m.list.Title)
+				if err == nil {
+					tasks := make([]TaskItem, 0, len(parsedTasks))
+					for _, t := range parsedTasks {
+						if t.IsChecked {
+							continue // Skip checked tasks in the TUI
+						}
+						line := fmt.Sprintf("%s %s", t.Description, t.TimeBox)
+						tasks = append(tasks, TaskItem{line: line, task: t})
+					}
+					items := make([]list.Item, len(tasks))
+					for i, t := range tasks {
+						items[i] = t
+					}
+					m.list.SetItems(items)
+				}
+			}
 			return m, nil
 		} else {
 			switch msg.String() {
