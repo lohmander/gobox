@@ -25,3 +25,4 @@ go.work.sum
 .env
 build
 test.md
+.gobox_state.json
