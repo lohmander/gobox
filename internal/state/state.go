@@ -1,6 +1,10 @@
 package state
 
-import "time"
+import (
+	"encoding/json"
+	"os"
+	"time"
+)
 
 // TimeBoxState represents the state of a timeboxed task, including its unique identifier
 // and the list of time segments (work intervals) associated with it.
@@ -48,4 +52,31 @@ func (t *TimeBoxState) UpdatedAt() time.Time {
 		return *last.End
 	}
 	return last.Start
+}
+
+// SaveToFile serializes the TimeBoxState to a file as JSON.
+func (t *TimeBoxState) SaveToFile(path string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	return enc.Encode(t)
+}
+
+// LoadFromFile deserializes a TimeBoxState from a JSON file.
+func LoadFromFile(path string) (*TimeBoxState, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var t TimeBoxState
+	dec := json.NewDecoder(f)
+	if err := dec.Decode(&t); err != nil {
+		return nil, err
+	}
+	return &t, nil
 }
