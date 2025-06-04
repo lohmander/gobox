@@ -2,14 +2,18 @@ package core
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"gobox/internal/gitutil" // Import gitutil
 	"gobox/internal/parser"  // Import parser
+	"gobox/internal/state"   // Import state for timebox state management
 	"gobox/pkg/task"         // Import task
 )
 
@@ -172,6 +176,78 @@ func StartGoBox(markdownFile string) {
 	}
 
 	startTime := time.Now()
+
+	// --- STATE MANAGEMENT: Save state when a task begins ---
+	stateFile := ".gobox_state.json"
+	var states []state.TimeBoxState
+
+	// Try to read the state file if it exists
+	if f, err := os.Open(stateFile); err == nil {
+		defer f.Close()
+		dec := json.NewDecoder(f)
+		if err := dec.Decode(&states); err != nil && err.Error() != "EOF" {
+			fmt.Printf("Warning: Could not decode state file: %v\n", err)
+		}
+	}
+
+	// Find or create the TimeBoxState for the current task
+	taskHash := nextTask.Hash()
+	found := false
+	for i := range states {
+		if states[i].TaskHash == taskHash {
+			// Add a new segment for this session
+			states[i].Segments = append(states[i].Segments, state.TimeSegment{Start: startTime, End: nil})
+			found = true
+			break
+		}
+	}
+	if !found {
+		states = append(states, state.TimeBoxState{
+			TaskHash: taskHash,
+			Segments: []state.TimeSegment{{Start: startTime, End: nil}},
+		})
+	}
+
+	// Write the updated state list back to disk
+	writeState := func(states []state.TimeBoxState) {
+		if f, err := os.Create(stateFile); err == nil {
+			defer f.Close()
+			enc := json.NewEncoder(f)
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(states); err != nil {
+				fmt.Printf("Warning: Could not write state file: %v\n", err)
+			}
+		} else {
+			fmt.Printf("Warning: Could not create state file: %v\n", err)
+		}
+	}
+	writeState(states)
+	// --- END STATE MANAGEMENT ---
+
+	// --- SIGNAL HANDLING: Pause timebox and save state on SIGINT/SIGTERM ---
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+
+	go func() {
+		sig := <-sigChan
+		fmt.Printf("\nReceived signal: %v. Pausing timebox and saving state...\n", sig)
+		now := time.Now()
+		// Find the current task's state and close the last segment if it's still open
+		for i := range states {
+			if states[i].TaskHash == taskHash && len(states[i].Segments) > 0 {
+				lastSeg := &states[i].Segments[len(states[i].Segments)-1]
+				if lastSeg.End == nil {
+					lastSeg.End = &now
+				}
+			}
+		}
+		writeState(states)
+
+		os.Exit(130) // 128 + SIGINT
+	}()
+	// --- END SIGNAL HANDLING ---
+
 	stopChan := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -202,12 +278,6 @@ func StartGoBox(markdownFile string) {
 	// Filter commits to only include those made *during* the task's actual run time
 	var commitsDuringTask []string
 	for _, commitLine := range allCommits {
-		// git log --oneline output is "hash message". We need the hash to check against our printed ones.
-		// For the final list, we just want the full line.
-		// We can't easily filter by time here from the string output, so we rely on getGitCommitsSince's --since.
-		// The --until flag is not used in getGitCommitsSince because we want to capture everything up to `finalEndTime`.
-		// A more robust solution would parse the commit date from `git log --format="%H %ad %s" --date=iso-strict`
-		// and then filter by `finalEndTime`. For simplicity, we'll just use what `getGitCommitsSince` returns.
 		commitsDuringTask = append(commitsDuringTask, commitLine)
 	}
 
