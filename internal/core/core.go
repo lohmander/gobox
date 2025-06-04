@@ -337,6 +337,16 @@ func StartGoBox(markdownFile string) {
 	// Update the markdown file, passing totalDuration
 	err = parser.UpdateMarkdown(markdownFile, *nextTask, commitsDuringTask, totalDuration) // Use parser package
 
+	// Remove the TimeBoxState for the completed task from state and save
+	// (stateFile, states, taskHash already in scope)
+	var newStates []state.TimeBoxState
+	for _, s := range states {
+		if s.TaskHash != taskHash {
+			newStates = append(newStates, s)
+		}
+	}
+	writeState(newStates)
+
 	if err != nil {
 		fmt.Printf("Error updating markdown file: %v\n", err)
 		os.Exit(1)
