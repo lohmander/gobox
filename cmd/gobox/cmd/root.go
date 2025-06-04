@@ -217,6 +217,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							table.WithRows([]table.Row{}),
 							table.WithFocused(false),
 						)
+						m.commitTable.SetWidth(70)
+						m.commitTable.SetHeight(10)
 						gw.Start()
 						return m, tea.Batch(sessionTickCmd(runner), watchCommitsCmd(gw))
 					}
@@ -248,7 +250,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		rows := append(m.commitTable.Rows(), table.Row{hash, msgStr})
 		m.commitTable.SetRows(rows)
-		m.commitTable.Blur() // Ensure table is unfocused so it doesn't take over the UI
+		// Only blur/focus on explicit user action (not here)
 		if len(rows) > 0 {
 			m.commitTable.SetCursor(len(rows) - 1)
 		}
@@ -265,9 +267,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !m.timerActive {
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
-		return m, cmd
+		// Always update the commitTable as well, so it can render/focus/scroll if needed
+		var tableCmd tea.Cmd
+		m.commitTable, tableCmd = m.commitTable.Update(msg)
+		return m, tea.Batch(cmd, tableCmd)
 	}
-	return m, nil
+	// Even if timer is active, update the commitTable for every message
+	var tableCmd tea.Cmd
+	m.commitTable, tableCmd = m.commitTable.Update(msg)
+	return m, tableCmd
 }
 
 // (removed parseDurationFromLine; now using parser.ParseTimeBox)
@@ -279,17 +287,16 @@ func (m model) View() string {
 		return "Goodbye!\n"
 	}
 	if m.timerActive {
-		commitSection := ""
-		if m.commitTable.Rows() != nil && len(m.commitTable.Rows()) > 0 {
-			commitSection = "\nCommits during session:\n" + m.commitTable.View()
-		}
-		return lipgloss.NewStyle().Padding(1).Render(
-			fmt.Sprintf(
-				"Working on: %s\nTime remaining: %s\n\nPress Enter to complete early.%s",
-				m.timerTask.line,
-				m.timer.Round(time.Second).String(),
-				commitSection,
+		return lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Padding(1).Render(
+				fmt.Sprintf(
+					"Working on: %s\nTime remaining: %s\n\nPress Enter to complete early.",
+					m.timerTask.line,
+					m.timer.Round(time.Second).String(),
+				),
 			),
+			lipgloss.NewStyle().Padding(1).Render("Commits during session:"),
+			m.commitTable.View(),
 		)
 	}
 	if m.timerDone {
@@ -300,7 +307,10 @@ func (m model) View() string {
 			fmt.Sprintf("Task completed!\n\nPress any key to return to the list."),
 		)
 	}
-	return lipgloss.NewStyle().Padding(1).Render(m.list.View())
+	return lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Padding(1).Render(m.list.View()),
+		m.commitTable.View(),
+	)
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
