@@ -1,0 +1,205 @@
+package session
+
+import (
+	"sync"
+	"time"
+
+	"gobox/internal/state"
+	"gobox/pkg/task"
+)
+
+// SessionEvent represents an event emitted by the session runner.
+type SessionEvent int
+
+const (
+	EventTick SessionEvent = iota
+	EventPaused
+	EventResumed
+	EventCompleted
+	EventStopped
+)
+
+// SessionRunner manages a timeboxed session for a task, including pause/resume and segment tracking.
+type SessionRunner struct {
+	Task         task.Task
+	State        *state.TimeBoxState
+	Duration     time.Duration // total timebox duration (if duration-based)
+	EndTime      time.Time     // absolute end time (if time-range-based)
+	Ticker       *time.Ticker
+	Mutex        sync.Mutex
+	Paused       bool
+	Completed    bool
+	eventCh      chan SessionEvent
+	stopCh       chan struct{}
+	wg           sync.WaitGroup
+}
+
+// NewSessionRunner creates a new session runner for a task and its state.
+func NewSessionRunner(task task.Task, tbState *state.TimeBoxState, duration time.Duration, endTime time.Time) *SessionRunner {
+	return &SessionRunner{
+		Task:     task,
+		State:    tbState,
+		Duration: duration,
+		EndTime:  endTime,
+		eventCh:  make(chan SessionEvent, 10),
+		stopCh:   make(chan struct{}),
+	}
+}
+
+// Start begins the session timer and emits tick events every second.
+func (sr *SessionRunner) Start() {
+	sr.Mutex.Lock()
+	if sr.Paused || sr.Completed {
+		sr.Mutex.Unlock()
+		return
+	}
+	// Start a new segment if not already running
+	if len(sr.State.Segments) == 0 || sr.State.Segments[len(sr.State.Segments)-1].End != nil {
+		now := time.Now()
+		sr.State.Segments = append(sr.State.Segments, state.TimeSegment{Start: now, End: nil})
+	}
+	sr.Ticker = time.NewTicker(1 * time.Second)
+	sr.wg.Add(1)
+	sr.Mutex.Unlock()
+
+	go func() {
+		defer sr.wg.Done()
+		for {
+			select {
+			case <-sr.Ticker.C:
+				sr.eventCh <- EventTick
+				if sr.isTimeUp() {
+					sr.Complete()
+					return
+				}
+			case <-sr.stopCh:
+				return
+			}
+		}
+	}()
+}
+
+// Pause pauses the session and closes the current segment.
+func (sr *SessionRunner) Pause() {
+	sr.Mutex.Lock()
+	defer sr.Mutex.Unlock()
+	if sr.Paused || sr.Completed {
+		return
+	}
+	now := time.Now()
+	if len(sr.State.Segments) > 0 {
+		last := &sr.State.Segments[len(sr.State.Segments)-1]
+		if last.End == nil {
+			last.End = &now
+		}
+	}
+	sr.Paused = true
+	if sr.Ticker != nil {
+		sr.Ticker.Stop()
+	}
+	sr.eventCh <- EventPaused
+}
+
+// Resume resumes the session and starts a new segment.
+func (sr *SessionRunner) Resume() {
+	sr.Mutex.Lock()
+	defer sr.Mutex.Unlock()
+	if !sr.Paused || sr.Completed {
+		return
+	}
+	now := time.Now()
+	sr.State.Segments = append(sr.State.Segments, state.TimeSegment{Start: now, End: nil})
+	sr.Paused = false
+	sr.Ticker = time.NewTicker(1 * time.Second)
+	sr.wg.Add(1)
+	go func() {
+		defer sr.wg.Done()
+		for {
+			select {
+			case <-sr.Ticker.C:
+				sr.eventCh <- EventTick
+				if sr.isTimeUp() {
+					sr.Complete()
+					return
+				}
+			case <-sr.stopCh:
+				return
+			}
+		}
+	}()
+	sr.eventCh <- EventResumed
+}
+
+// Complete ends the session, closes the current segment, and emits EventCompleted.
+func (sr *SessionRunner) Complete() {
+	sr.Mutex.Lock()
+	defer sr.Mutex.Unlock()
+	if sr.Completed {
+		return
+	}
+	now := time.Now()
+	if len(sr.State.Segments) > 0 {
+		last := &sr.State.Segments[len(sr.State.Segments)-1]
+		if last.End == nil {
+			last.End = &now
+		}
+	}
+	sr.Completed = true
+	if sr.Ticker != nil {
+		sr.Ticker.Stop()
+	}
+	close(sr.stopCh)
+	sr.eventCh <- EventCompleted
+}
+
+// Stop ends the session without marking it as completed.
+func (sr *SessionRunner) Stop() {
+	sr.Mutex.Lock()
+	defer sr.Mutex.Unlock()
+	if sr.Ticker != nil {
+		sr.Ticker.Stop()
+	}
+	close(sr.stopCh)
+	sr.eventCh <- EventStopped
+}
+
+// Wait blocks until the session goroutine(s) have finished.
+func (sr *SessionRunner) Wait() {
+	sr.wg.Wait()
+}
+
+// Events returns the channel for receiving session events.
+func (sr *SessionRunner) Events() <-chan SessionEvent {
+	return sr.eventCh
+}
+
+// isTimeUp checks if the session has reached its duration or end time.
+func (sr *SessionRunner) isTimeUp() bool {
+	if sr.Duration > 0 {
+		var elapsed time.Duration
+		for _, seg := range sr.State.Segments {
+			if seg.End != nil {
+				elapsed += seg.End.Sub(seg.Start)
+			} else {
+				elapsed += time.Since(seg.Start)
+			}
+		}
+		return elapsed >= sr.Duration
+	} else if !sr.EndTime.IsZero() {
+		return time.Now().After(sr.EndTime)
+	}
+	return false
+}
+
+// TotalElapsed returns the total elapsed time across all segments.
+func (sr *SessionRunner) TotalElapsed() time.Duration {
+	var elapsed time.Duration
+	for _, seg := range sr.State.Segments {
+		if seg.End != nil {
+			elapsed += seg.End.Sub(seg.Start)
+		} else {
+			elapsed += time.Since(seg.Start)
+		}
+	}
+	return elapsed
+}
