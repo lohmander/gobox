@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"gobox/internal/core" // Import our new internal/core package
 	"gobox/internal/parser"
+	"gobox/pkg/task"
 
 	"fmt"
 
@@ -38,19 +40,20 @@ var tuiCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		markdownFile := args[0]
 		parsedTasks, err := parser.ParseMarkdownFile(markdownFile)
+
 		if err != nil {
 			fmt.Println("Error loading tasks from markdown:", err)
 			os.Exit(1)
 		}
+
 		tasks := make([]TaskItem, 0, len(parsedTasks))
 		for _, t := range parsedTasks {
-			tasks = append(tasks, TaskItem{
-				title: t.Description,
-				desc:  t.TimeBox,
-			})
+			line := fmt.Sprintf("%s %s", t.Description, t.TimeBox)
+			tasks = append(tasks, TaskItem{line: line, task: t})
 		}
 		p := tea.NewProgram(initialModel(tasks))
-		if err := p.Start(); err != nil {
+
+		if _, err := p.Run(); err != nil {
 			fmt.Println("Error running TUI:", err)
 			os.Exit(1)
 		}
@@ -59,17 +62,23 @@ var tuiCmd = &cobra.Command{
 
 // TaskItem represents a task for the list.
 type TaskItem struct {
-	title, desc string
+	line string // single-line display: description + timebox
+	task task.Task
 }
 
-func (t TaskItem) Title() string       { return t.title }
-func (t TaskItem) Description() string { return t.desc }
-func (t TaskItem) FilterValue() string { return t.title }
+func (t TaskItem) Title() string       { return t.line }
+func (t TaskItem) Description() string { return "" }
+func (t TaskItem) FilterValue() string { return t.line }
 
 // model is the Bubbletea model for the TUI.
 type model struct {
-	list     list.Model
-	quitting bool
+	list        list.Model
+	quitting    bool
+	timerActive bool
+	timer       time.Duration
+	timerTotal  time.Duration
+	timerTask   TaskItem
+	timerDone   bool
 }
 
 func initialModel(tasks []TaskItem) model {
@@ -86,26 +95,101 @@ func (m model) Init() tea.Cmd {
 	return nil
 }
 
+type tickMsg struct{}
+
+func tick() tea.Msg {
+	time.Sleep(1 * time.Second)
+	return tickMsg{}
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
-			m.quitting = true
-			return m, tea.Quit
-		case "enter":
-			// TODO: Start timebox for selected task
+		if m.timerActive {
+			switch msg.String() {
+			case "ctrl+c", "q":
+				m.quitting = true
+				return m, tea.Quit
+			case "enter":
+				// Complete timer early
+				m.timerActive = false
+				m.timerDone = true
+				return m, nil
+			}
+		} else if m.timerDone {
+			// Any key returns to list UI after completion message
+			m.timerDone = false
 			return m, nil
+		} else {
+			switch msg.String() {
+			case "ctrl+c", "q":
+				m.quitting = true
+				return m, tea.Quit
+			case "enter":
+				// Start timer for selected task
+				if item, ok := m.list.SelectedItem().(TaskItem); ok {
+					duration, endTime, err := parser.ParseTimeBox(item.task.TimeBox)
+					if err == nil && (duration > 0 || !endTime.IsZero()) {
+						var timerDuration time.Duration
+						if duration > 0 {
+							timerDuration = duration
+						} else {
+							timerDuration = time.Until(endTime)
+						}
+						m.timerActive = true
+						m.timer = timerDuration
+						m.timerTotal = timerDuration
+						m.timerTask = item
+						m.timerDone = false
+						return m, tick
+					}
+				}
+				return m, nil
+			}
+		}
+	case tickMsg:
+		if m.timerActive {
+			if m.timer > time.Second {
+				m.timer -= time.Second
+				return m, tick
+			} else {
+				m.timer = 0
+				m.timerActive = false
+				m.timerDone = true
+				return m, nil
+			}
 		}
 	}
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	return m, cmd
+	if !m.timerActive {
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		return m, cmd
+	}
+	return m, nil
 }
+
+// (removed parseDurationFromLine; now using parser.ParseTimeBox)
 
 func (m model) View() string {
 	if m.quitting {
 		return "Goodbye!\n"
+	}
+	if m.timerActive {
+		return lipgloss.NewStyle().Padding(1).Render(
+			fmt.Sprintf(
+				"Working on: %s\nTime remaining: %s\n\nPress Enter to complete early.",
+				m.timerTask.line,
+				m.timer.Round(time.Second).String(),
+			),
+		)
+	}
+	if m.timerDone {
+		// Show completion message and return to list after a keypress
+		m2 := m
+		m2.timerDone = false
+		return lipgloss.NewStyle().Padding(1).Render(
+			fmt.Sprintf("Task completed!\n\nPress any key to return to the list."),
+		)
 	}
 	return lipgloss.NewStyle().Padding(1).Render(m.list.View())
 }
