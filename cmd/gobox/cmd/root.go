@@ -8,6 +8,8 @@ import (
 
 	"gobox/internal/core" // Import our new internal/core package
 	"gobox/internal/parser"
+	"gobox/internal/session"
+	"gobox/internal/state"
 	"gobox/pkg/task"
 
 	"fmt"
@@ -76,13 +78,15 @@ func (t TaskItem) FilterValue() string { return t.line }
 
 // model is the Bubbletea model for the TUI.
 type model struct {
-	list        list.Model
-	quitting    bool
-	timerActive bool
-	timer       time.Duration
-	timerTotal  time.Duration
-	timerTask   TaskItem
-	timerDone   bool
+	list          list.Model
+	quitting      bool
+	timerActive   bool
+	timer         time.Duration
+	timerTotal    time.Duration
+	timerTask     TaskItem
+	timerDone     bool
+	sessionRunner *session.SessionRunner
+	sessionState  *state.TimeBoxState
 }
 
 func initialModel(tasks []TaskItem, markdownFile string) model {
@@ -100,10 +104,20 @@ func (m model) Init() tea.Cmd {
 }
 
 type tickMsg struct{}
+type sessionCompletedMsg struct{}
 
-func tick() tea.Msg {
-	time.Sleep(1 * time.Second)
-	return tickMsg{}
+func sessionTickCmd(runner *session.SessionRunner) tea.Cmd {
+	return func() tea.Msg {
+		for {
+			ev := <-runner.Events()
+			switch ev {
+			case session.EventTick:
+				return tickMsg{}
+			case session.EventCompleted:
+				return sessionCompletedMsg{}
+			}
+		}
+	}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -113,18 +127,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "ctrl+c", "q":
 				m.quitting = true
+				if m.sessionRunner != nil {
+					m.sessionRunner.Stop()
+				}
 				return m, tea.Quit
 			case "enter":
 				// Complete timer early
-				m.timerActive = false
-				m.timerDone = true
+				if m.sessionRunner != nil {
+					m.sessionRunner.Complete()
+				}
 				return m, nil
 			}
 		} else if m.timerDone {
-			// Mark the task as checked in the Markdown file using core.CompleteTask
-			err := core.CompleteTask(m.list.Title, m.timerTask.task, m.timerTotal, nil)
-			if err != nil {
-				fmt.Println("Error updating markdown:", err)
+			// Mark the task as checked in the Markdown file using core.CompleteTask with TimeBoxState
+			if m.sessionState != nil {
+				err := core.CompleteTask(m.list.Title, m.timerTask.task, *m.sessionState, nil)
+				if err != nil {
+					fmt.Println("Error updating markdown:", err)
+				}
 			}
 			m.timerDone = false
 			// Reload tasks from markdown file
@@ -153,39 +173,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.quitting = true
 				return m, tea.Quit
 			case "enter":
-				// Start timer for selected task
+				// Start timer for selected task using SessionRunner
 				if item, ok := m.list.SelectedItem().(TaskItem); ok {
 					duration, endTime, err := parser.ParseTimeBox(item.task.TimeBox)
 					if err == nil && (duration > 0 || !endTime.IsZero()) {
-						var timerDuration time.Duration
-						if duration > 0 {
-							timerDuration = duration
-						} else {
-							timerDuration = time.Until(endTime)
-						}
+						tbState := &state.TimeBoxState{TaskHash: item.task.Hash()}
+						runner := session.NewSessionRunner(item.task, tbState, duration, endTime)
+						m.sessionRunner = runner
+						m.sessionState = tbState
 						m.timerActive = true
-						m.timer = timerDuration
-						m.timerTotal = timerDuration
-						m.timerTask = item
 						m.timerDone = false
-						return m, tick
+						m.timerTask = item
+						runner.Start()
+						return m, sessionTickCmd(runner)
 					}
 				}
 				return m, nil
 			}
 		}
 	case tickMsg:
-		if m.timerActive {
-			if m.timer > time.Second {
-				m.timer -= time.Second
-				return m, tick
+		if m.timerActive && m.sessionRunner != nil {
+			// Update timer from sessionRunner
+			m.timer = m.sessionRunner.Duration
+			elapsed := m.sessionRunner.TotalElapsed()
+			if m.timer > elapsed {
+				m.timer = m.timer - elapsed
 			} else {
 				m.timer = 0
-				m.timerActive = false
-				m.timerDone = true
-				return m, nil
 			}
+			return m, sessionTickCmd(m.sessionRunner)
 		}
+	case sessionCompletedMsg:
+		m.timerActive = false
+		m.timerDone = true
+		return m, nil
 	}
 	if !m.timerActive {
 		var cmd tea.Cmd

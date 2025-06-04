@@ -219,10 +219,17 @@ func StartGoBoxWithClock(markdownFile string, clk clock.Clock) error {
 }
 
 // CompleteTask marks a task as checked, updates the markdown file, and records duration/commits.
-func CompleteTask(markdownFile string, t task.Task, duration time.Duration, commits []string) error {
+// It sums all segments in the TimeBoxState for total duration.
+func CompleteTask(markdownFile string, t task.Task, tbState state.TimeBoxState, commits []string) error {
 	updated := t
 	updated.IsChecked = true
-	return parser.UpdateMarkdown(markdownFile, updated, commits, duration)
+	var totalDuration time.Duration
+	for _, seg := range tbState.Segments {
+		if seg.End != nil {
+			totalDuration += seg.End.Sub(seg.Start)
+		}
+	}
+	return parser.UpdateMarkdown(markdownFile, updated, commits, totalDuration)
 }
 
 // --- Helper Functions ---
