@@ -17,6 +17,7 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -91,6 +92,7 @@ type model struct {
 	sessionState  *state.TimeBoxState
 	gitWatcher    *gitwatcher.GitWatcher
 	commits       []string
+	commitTable   table.Model
 }
 
 func initialModel(tasks []TaskItem, markdownFile string) model {
@@ -205,6 +207,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						gw := gitwatcher.NewGitWatcher(time.Now(), 5*time.Second)
 						m.gitWatcher = gw
 						m.commits = nil
+						// Initialize commitTable
+						columns := []table.Column{
+							{Title: "Hash", Width: 10},
+							{Title: "Message", Width: 60},
+						}
+						m.commitTable = table.New(
+							table.WithColumns(columns),
+							table.WithRows([]table.Row{}),
+							table.WithFocused(false),
+						)
 						gw.Start()
 						return m, tea.Batch(sessionTickCmd(runner), watchCommitsCmd(gw))
 					}
@@ -225,8 +237,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(sessionTickCmd(m.sessionRunner), watchCommitsCmd(m.gitWatcher))
 		}
 	case commitMsg:
-		// Add new commit to the list
-		m.commits = append(m.commits, string(msg))
+		// Add new commit to the list and table
+		commit := string(msg)
+		m.commits = append(m.commits, commit)
+		parts := strings.SplitN(commit, " ", 2)
+		hash := parts[0]
+		msgStr := ""
+		if len(parts) > 1 {
+			msgStr = parts[1]
+		}
+		rows := append(m.commitTable.Rows(), table.Row{hash, msgStr})
+		m.commitTable.SetRows(rows)
+		m.commitTable.Blur() // Ensure table is unfocused so it doesn't take over the UI
+		if len(rows) > 0 {
+			m.commitTable.SetCursor(len(rows) - 1)
+		}
 		return m, watchCommitsCmd(m.gitWatcher)
 	case sessionCompletedMsg:
 		m.timerActive = false
@@ -247,27 +272,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // (removed parseDurationFromLine; now using parser.ParseTimeBox)
 
-func formatCommits(commits []string) string {
-	if len(commits) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	hashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
-	for _, c := range commits {
-		parts := strings.SplitN(c, " ", 2)
-		hash := parts[0]
-		msg := ""
-		if len(parts) > 1 {
-			msg = parts[1]
-		}
-		b.WriteString(hashStyle.Render(hash))
-		b.WriteString("  ")
-		b.WriteString(msgStyle.Render(msg))
-		b.WriteString("\n")
-	}
-	return b.String()
-}
+// formatCommits is no longer needed; using table.Model for commit display.
 
 func (m model) View() string {
 	if m.quitting {
@@ -275,8 +280,8 @@ func (m model) View() string {
 	}
 	if m.timerActive {
 		commitSection := ""
-		if len(m.commits) > 0 {
-			commitSection = "\nCommits during session:\n" + formatCommits(m.commits)
+		if m.commitTable.Rows() != nil && len(m.commitTable.Rows()) > 0 {
+			commitSection = "\nCommits during session:\n" + m.commitTable.View()
 		}
 		return lipgloss.NewStyle().Padding(1).Render(
 			fmt.Sprintf(
