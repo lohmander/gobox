@@ -218,6 +218,13 @@ func StartGoBoxWithClock(markdownFile string, clk clock.Clock) error {
 	return StartGoBoxWithClockAndStore(markdownFile, clk, NewFileStateStore(".gobox_state.json"))
 }
 
+// CompleteTask marks a task as checked, updates the markdown file, and records duration/commits.
+func CompleteTask(markdownFile string, t task.Task, duration time.Duration, commits []string) error {
+	updated := t
+	updated.IsChecked = true
+	return parser.UpdateMarkdown(markdownFile, updated, commits, duration)
+}
+
 // --- Helper Functions ---
 
 func selectNextTask(tasks []task.Task) *task.Task {

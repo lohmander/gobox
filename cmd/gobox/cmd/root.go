@@ -121,10 +121,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		} else if m.timerDone {
-			// Mark the task as checked in the Markdown file
-			updated := m.timerTask.task
-			updated.IsChecked = true
-			err := parser.UpdateMarkdown(m.list.Title, updated, nil, m.timerTotal)
+			// Mark the task as checked in the Markdown file using core.CompleteTask
+			err := core.CompleteTask(m.list.Title, m.timerTask.task, m.timerTotal, nil)
 			if err != nil {
 				fmt.Println("Error updating markdown:", err)
 			}
