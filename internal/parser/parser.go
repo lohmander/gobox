@@ -170,11 +170,12 @@ func ParseTimeBox(timeBox string) (time.Duration, time.Time, error) {
 }
 
 // UpdateMarkdown updates the task, adds commits, and records actual time spent in the markdown file.
+// totalDuration should be the sum of all time segments for the task.
 func UpdateMarkdown(
 	filename string,
 	updatedTask task.Task,
 	commits []string,
-	startTime, endTime time.Time,
+	totalDuration time.Duration,
 ) error {
 	content, err := os.ReadFile(filename)
 	if err != nil {
@@ -208,13 +209,11 @@ func UpdateMarkdown(
 
 				taskText = append(taskText, []byte(updatedTask.String()))
 
-				// Add actual duration if both startTime and endTime are set
-				if !startTime.IsZero() && !endTime.IsZero() {
-					duration := endTime.Sub(startTime)
-					hours := int(duration.Hours())
-					minutes := int(duration.Minutes()) % 60
-					seconds := int(duration.Seconds()) % 60
-					duration = time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute + time.Duration(seconds)*time.Second
+				// Add actual duration if totalDuration is set
+				if totalDuration > 0 {
+					hours := int(totalDuration.Hours())
+					minutes := int(totalDuration.Minutes()) % 60
+					seconds := int(totalDuration.Seconds()) % 60
 					durationStr := fmt.Sprintf("  ⏱️ %dh %dm %ds", hours, minutes, seconds)
 					taskText = append(taskText, []byte(durationStr))
 				}

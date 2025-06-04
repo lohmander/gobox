@@ -171,7 +171,9 @@ func TestUpdateMarkdown(t *testing.T) {
 	start := time.Now()
 	end := start.Add(1 * time.Hour)
 
-	err = parser.UpdateMarkdown(tmpFile.Name(), updated, nil, start, end)
+	// Use totalDuration instead of start/end
+	totalDuration := end.Sub(start)
+	err = parser.UpdateMarkdown(tmpFile.Name(), updated, nil, totalDuration)
 	if err != nil {
 		t.Fatalf("UpdateMarkdown failed: %v", err)
 	}

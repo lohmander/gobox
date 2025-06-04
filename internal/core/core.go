@@ -175,9 +175,7 @@ func StartGoBox(markdownFile string) {
 		os.Exit(1)
 	}
 
-	startTime := time.Now()
-
-	// --- STATE MANAGEMENT: Save state when a task begins ---
+	// --- STATE MANAGEMENT: Resume or start timebox state ---
 	stateFile := ".gobox_state.json"
 	var states []state.TimeBoxState
 
@@ -190,22 +188,28 @@ func StartGoBox(markdownFile string) {
 		}
 	}
 
-	// Find or create the TimeBoxState for the current task
 	taskHash := nextTask.Hash()
-	found := false
+	var currentState *state.TimeBoxState
 	for i := range states {
 		if states[i].TaskHash == taskHash {
-			// Add a new segment for this session
-			states[i].Segments = append(states[i].Segments, state.TimeSegment{Start: startTime, End: nil})
-			found = true
+			currentState = &states[i]
 			break
 		}
 	}
-	if !found {
+	now := time.Now()
+	if currentState == nil {
+		// No previous state, create new
 		states = append(states, state.TimeBoxState{
 			TaskHash: taskHash,
-			Segments: []state.TimeSegment{{Start: startTime, End: nil}},
+			Segments: []state.TimeSegment{{Start: now, End: nil}},
 		})
+		currentState = &states[len(states)-1]
+	} else {
+		// There is previous state, check if last segment is open
+		if len(currentState.Segments) == 0 || currentState.Segments[len(currentState.Segments)-1].End != nil {
+			// All segments closed, start a new one
+			currentState.Segments = append(currentState.Segments, state.TimeSegment{Start: now, End: nil})
+		}
 	}
 
 	// Write the updated state list back to disk
@@ -223,6 +227,26 @@ func StartGoBox(markdownFile string) {
 	}
 	writeState(states)
 	// --- END STATE MANAGEMENT ---
+
+	// --- Calculate elapsed and set timer start ---
+	var elapsed time.Duration
+	if currentState != nil {
+		for _, seg := range currentState.Segments {
+			if seg.End != nil {
+				elapsed += seg.End.Sub(seg.Start)
+			} else {
+				// Ongoing segment, add up to now
+				elapsed += now.Sub(seg.Start)
+			}
+		}
+	}
+	var timerStartTime time.Time
+	if currentState != nil && len(currentState.Segments) > 0 && currentState.Segments[len(currentState.Segments)-1].End == nil {
+		// Resume from the start of the last segment
+		timerStartTime = currentState.Segments[len(currentState.Segments)-1].Start
+	} else {
+		timerStartTime = now
+	}
 
 	// --- SIGNAL HANDLING: Pause timebox and save state on SIGINT/SIGTERM ---
 	sigChan := make(chan os.Signal, 1)
@@ -252,7 +276,21 @@ func StartGoBox(markdownFile string) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	go timerAndGitWatcher(nextTask.Description, actualDuration, actualEndTime, startTime, stopChan, &wg)
+	// For duration-based timer, subtract elapsed from total duration
+	var timerDuration time.Duration
+	if actualDuration > 0 {
+		if elapsed >= actualDuration {
+			fmt.Println("Task has already used up its allocated timebox. Marking as done.")
+			nextTask.IsChecked = true
+			writeState(states)
+			return
+		}
+		timerDuration = actualDuration - elapsed
+	} else {
+		timerDuration = 0 // Not used for endTime-based
+	}
+
+	go timerAndGitWatcher(nextTask.Description, timerDuration, actualEndTime, timerStartTime, stopChan, &wg)
 
 	// Wait for user input to finish early or timer to expire
 	reader := bufio.NewReader(os.Stdin)
@@ -268,7 +306,7 @@ func StartGoBox(markdownFile string) {
 	finalEndTime := time.Now() // Record the actual end time of the task
 
 	// Fetch all commits made during the task's active period
-	allCommits, err := gitutil.GetCommitsSince(startTime) // Use gitutil package
+	allCommits, err := gitutil.GetCommitsSince(timerStartTime) // Use gitutil package
 	if err != nil {
 		fmt.Printf("Warning: Could not fetch Git commits: %v\n", err)
 		// Continue even if git commits fail, just don't add them
@@ -283,8 +321,21 @@ func StartGoBox(markdownFile string) {
 
 	nextTask.IsChecked = true // Mark the task as completed
 
-	// Update the markdown file, passing startTime and finalEndTime
-	err = parser.UpdateMarkdown(markdownFile, *nextTask, commitsDuringTask, startTime, finalEndTime) // Use parser package
+	// Calculate total duration from all segments for this task
+	var totalDuration time.Duration
+	if currentState != nil {
+		for _, seg := range currentState.Segments {
+			if seg.End != nil {
+				totalDuration += seg.End.Sub(seg.Start)
+			} else {
+				// If the segment is still open, close it at finalEndTime
+				totalDuration += finalEndTime.Sub(seg.Start)
+			}
+		}
+	}
+
+	// Update the markdown file, passing totalDuration
+	err = parser.UpdateMarkdown(markdownFile, *nextTask, commitsDuringTask, totalDuration) // Use parser package
 
 	if err != nil {
 		fmt.Printf("Error updating markdown file: %v\n", err)
