@@ -2,7 +2,6 @@ package core
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -144,134 +143,147 @@ func timerAndGitWatcher(
 // It returns an error or nil. The CLI should handle os.Exit.
 // Accepts an optional clock.Clock for testability; uses RealClock if nil.
 func StartGoBox(markdownFile string) error {
-	return StartGoBoxWithClock(markdownFile, clock.RealClock{})
+	return StartGoBoxWithClockAndStore(markdownFile, clock.RealClock{}, NewFileStateStore(".gobox_state.json"))
 }
 
-func StartGoBoxWithClock(markdownFile string, clk clock.Clock) error {
+// StartGoBoxWithClockAndStore allows injecting both a clock and a StateStore for testability.
+func StartGoBoxWithClockAndStore(markdownFile string, clk clock.Clock, stateMgr StateStore) error {
 	if clk == nil {
 		clk = clock.RealClock{}
 	}
-	tasks, err := parser.ParseMarkdownFile(markdownFile) // Use parser package
+	tasks, err := parser.ParseMarkdownFile(markdownFile)
 	if err != nil {
 		return fmt.Errorf("Error parsing markdown file: %w", err)
 	}
 
-	var nextTask *task.Task // Use task package
-	for i := range tasks {
-		if !tasks[i].IsChecked && tasks[i].TimeBox != "" {
-			nextTask = &tasks[i]
-			break
-		}
-	}
-
+	nextTask := selectNextTask(tasks)
 	if nextTask == nil {
 		fmt.Println("No unchecked tasks with time boxes found in the markdown file.")
-		return nil // Not an error, just nothing to do
+		return nil
 	}
 
-	duration, endTime, err := parser.ParseTimeBox(nextTask.TimeBox) // Use parser package
+	duration, endTime, err := parser.ParseTimeBox(nextTask.TimeBox)
 	if err != nil {
 		return fmt.Errorf("Error parsing time box '%s': %v", nextTask.TimeBox, err)
 	}
 
-	// Determine effective duration/end time for the timer
-	var actualDuration time.Duration
-	var actualEndTime time.Time
-	if duration > 0 {
-		actualDuration = duration
-	} else if !endTime.IsZero() {
-		actualEndTime = endTime
-		// If the end time is in the past, consider the task already done or for next day
-		if time.Until(actualEndTime) <= 0 {
-			fmt.Printf("Task '%s' with timebox '%s' is already past its end time. Skipping.\n", nextTask.Description, nextTask.TimeBox)
-			return nil
-		}
-	} else {
-		return fmt.Errorf("Task '%s' has an invalid or unsupported timebox: %s", nextTask.Description, nextTask.TimeBox)
+	actualDuration, actualEndTime, skip := determineTimer(duration, endTime, nextTask)
+	if skip {
+		return nil
 	}
 
-	// --- STATE MANAGEMENT: Resume or start timebox state ---
-	stateFile := ".gobox_state.json"
-	var states []state.TimeBoxState
-
-	// Try to read the state file if it exists
-	if f, err := os.Open(stateFile); err == nil {
-		defer f.Close()
-		dec := json.NewDecoder(f)
-		if err := dec.Decode(&states); err != nil && err.Error() != "EOF" {
-			fmt.Printf("Warning: Could not decode state file: %v\n", err)
-		}
-	}
-
+	states, _ := stateMgr.Load()
 	taskHash := nextTask.Hash()
-	var currentState *state.TimeBoxState
+	now := clk.Now()
+	states, currentState := findOrCreateState(states, taskHash, now)
+	stateMgr.Save(states)
+
+	elapsed, timerStartTime := calculateElapsedAndStart(currentState, now)
+	setupSignalHandler(states, stateMgr, taskHash)
+
+	stopChan := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	timerDuration := getTimerDuration(actualDuration, elapsed, nextTask, stateMgr, states)
+	go timerAndGitWatcher(nextTask.Description, timerDuration, actualEndTime, timerStartTime, stopChan, &wg, clk)
+
+	reader := bufio.NewReader(os.Stdin)
+	_, _ = reader.ReadBytes('\n')
+	select {
+	case stopChan <- struct{}{}:
+	default:
+	}
+	wg.Wait()
+
+	finalEndTime := clk.Now()
+	closeCurrentSegmentIfOpen(currentState, finalEndTime, stateMgr, states)
+	commitsDuringTask := getCommitsDuringTask(timerStartTime)
+	nextTask.IsChecked = true
+	totalDuration := calculateTotalDuration(currentState, finalEndTime)
+	err = parser.UpdateMarkdown(markdownFile, *nextTask, commitsDuringTask, totalDuration)
+	newStates := stateMgr.RemoveTaskState(states, taskHash)
+	stateMgr.Save(newStates)
+
+	if err != nil {
+		return fmt.Errorf("Error updating markdown file: %v", err)
+	}
+
+	fmt.Println("\nTask completed and markdown updated!")
+	return nil
+}
+
+// For backward compatibility, keep StartGoBoxWithClock as a wrapper.
+func StartGoBoxWithClock(markdownFile string, clk clock.Clock) error {
+	return StartGoBoxWithClockAndStore(markdownFile, clk, NewFileStateStore(".gobox_state.json"))
+}
+
+// --- Helper Functions ---
+
+func selectNextTask(tasks []task.Task) *task.Task {
+	for i := range tasks {
+		if !tasks[i].IsChecked && tasks[i].TimeBox != "" {
+			return &tasks[i]
+		}
+	}
+	return nil
+}
+
+func determineTimer(duration time.Duration, endTime time.Time, nextTask *task.Task) (time.Duration, time.Time, bool) {
+	if duration > 0 {
+		return duration, time.Time{}, false
+	} else if !endTime.IsZero() {
+		if time.Until(endTime) <= 0 {
+			fmt.Printf("Task '%s' with timebox '%s' is already past its end time. Skipping.\n", nextTask.Description, nextTask.TimeBox)
+			return 0, time.Time{}, true
+		}
+		return 0, endTime, false
+	}
+	fmt.Printf("Task '%s' has an invalid or unsupported timebox: %s\n", nextTask.Description, nextTask.TimeBox)
+	return 0, time.Time{}, true
+}
+
+func findOrCreateState(states []state.TimeBoxState, taskHash string, now time.Time) ([]state.TimeBoxState, *state.TimeBoxState) {
 	for i := range states {
 		if states[i].TaskHash == taskHash {
-			currentState = &states[i]
-			break
-		}
-	}
-	now := clk.Now()
-	if currentState == nil {
-		// No previous state, create new
-		states = append(states, state.TimeBoxState{
-			TaskHash: taskHash,
-			Segments: []state.TimeSegment{{Start: now, End: nil}},
-		})
-		currentState = &states[len(states)-1]
-	} else {
-		// There is previous state, check if last segment is open
-		if len(currentState.Segments) == 0 || currentState.Segments[len(currentState.Segments)-1].End != nil {
-			// All segments closed, start a new one
-			currentState.Segments = append(currentState.Segments, state.TimeSegment{Start: now, End: nil})
-		}
-	}
-
-	// Write the updated state list back to disk
-	writeState := func(states []state.TimeBoxState) {
-		if f, err := os.Create(stateFile); err == nil {
-			defer f.Close()
-			enc := json.NewEncoder(f)
-			enc.SetIndent("", "  ")
-			if err := enc.Encode(states); err != nil {
-				fmt.Printf("Warning: Could not write state file: %v\n", err)
+			if len(states[i].Segments) == 0 || states[i].Segments[len(states[i].Segments)-1].End != nil {
+				states[i].Segments = append(states[i].Segments, state.TimeSegment{Start: now, End: nil})
 			}
-		} else {
-			fmt.Printf("Warning: Could not create state file: %v\n", err)
+			return states, &states[i]
 		}
 	}
-	writeState(states)
-	// --- END STATE MANAGEMENT ---
+	states = append(states, state.TimeBoxState{
+		TaskHash: taskHash,
+		Segments: []state.TimeSegment{{Start: now, End: nil}},
+	})
+	return states, &states[len(states)-1]
+}
 
-	// --- Calculate elapsed and set timer start ---
+func calculateElapsedAndStart(currentState *state.TimeBoxState, now time.Time) (time.Duration, time.Time) {
 	var elapsed time.Duration
-	if currentState != nil {
-		for _, seg := range currentState.Segments {
-			if seg.End != nil {
-				elapsed += seg.End.Sub(seg.Start)
-			} else {
-				// Ongoing segment, add up to now
-				elapsed += now.Sub(seg.Start)
-			}
+	for _, seg := range currentState.Segments {
+		if seg.End != nil {
+			elapsed += seg.End.Sub(seg.Start)
+		} else {
+			elapsed += now.Sub(seg.Start)
 		}
 	}
 	var timerStartTime time.Time
-	if currentState != nil && len(currentState.Segments) > 0 && currentState.Segments[len(currentState.Segments)-1].End == nil {
-		// Resume from the start of the last segment
+	if len(currentState.Segments) > 0 && currentState.Segments[len(currentState.Segments)-1].End == nil {
 		timerStartTime = currentState.Segments[len(currentState.Segments)-1].Start
 	} else {
 		timerStartTime = now
 	}
+	return elapsed, timerStartTime
+}
 
-	// --- SIGNAL HANDLING: Pause timebox and save state on SIGINT/SIGTERM ---
+func setupSignalHandler(states []state.TimeBoxState, stateMgr StateStore, taskHash string) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
 	go func() {
 		sig := <-sigChan
 		fmt.Printf("\nReceived signal: %v. Pausing timebox and saving state...\n", sig)
 		now := time.Now()
-		// Find the current task's state and close the last segment if it's still open
 		for i := range states {
 			if states[i].TaskHash == taskHash && len(states[i].Segments) > 0 {
 				lastSeg := &states[i].Segments[len(states[i].Segments)-1]
@@ -280,100 +292,55 @@ func StartGoBoxWithClock(markdownFile string, clk clock.Clock) error {
 				}
 			}
 		}
-		writeState(states)
-
-		os.Exit(130) // 128 + SIGINT
+		stateMgr.Save(states)
+		os.Exit(130)
 	}()
-	// --- END SIGNAL HANDLING ---
+}
 
-	stopChan := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	// For duration-based timer, subtract elapsed from total duration
-	var timerDuration time.Duration
+func getTimerDuration(actualDuration, elapsed time.Duration, nextTask *task.Task, stateMgr StateStore, states []state.TimeBoxState) time.Duration {
 	if actualDuration > 0 {
 		if elapsed >= actualDuration {
 			fmt.Println("Task has already used up its allocated timebox. Marking as done.")
 			nextTask.IsChecked = true
-			writeState(states)
-			return nil
+			stateMgr.Save(states)
+			return 0
 		}
-		timerDuration = actualDuration - elapsed
-	} else {
-		timerDuration = 0 // Not used for endTime-based
+		return actualDuration - elapsed
 	}
+	return 0
+}
 
-	go timerAndGitWatcher(nextTask.Description, timerDuration, actualEndTime, timerStartTime, stopChan, &wg, clock.RealClock{})
-
-	// Wait for user input to finish early or timer to expire
-	reader := bufio.NewReader(os.Stdin)
-	_, _ = reader.ReadBytes('\n') // This will block until Enter is pressed
-
-	// Signal the goroutine to stop
-	select {
-	case stopChan <- struct{}{}:
-	default: // Non-blocking send in case the goroutine already exited (e.g., timer expired)
-	}
-	wg.Wait() // Wait for the goroutine to finish its cleanup
-
-	finalEndTime := time.Now() // Record the actual end time of the task
-
-	// --- Ensure the current segment is closed if still open ---
+func closeCurrentSegmentIfOpen(currentState *state.TimeBoxState, finalEndTime time.Time, stateMgr StateStore, states []state.TimeBoxState) {
 	if currentState != nil && len(currentState.Segments) > 0 {
 		lastSeg := &currentState.Segments[len(currentState.Segments)-1]
 		if lastSeg.End == nil {
 			lastSeg.End = &finalEndTime
-			writeState(states)
+			stateMgr.Save(states)
 		}
 	}
+}
 
-	// Fetch all commits made during the task's active period
-	allCommits, err := gitutil.GetCommitsSince(timerStartTime) // Use gitutil package
+func getCommitsDuringTask(timerStartTime time.Time) []string {
+	allCommits, err := gitutil.GetCommitsSince(timerStartTime)
 	if err != nil {
 		fmt.Printf("Warning: Could not fetch Git commits: %v\n", err)
-		// Continue even if git commits fail, just don't add them
 		allCommits = []string{}
 	}
-
-	// Filter commits to only include those made *during* the task's actual run time
 	var commitsDuringTask []string
 	for _, commitLine := range allCommits {
 		commitsDuringTask = append(commitsDuringTask, commitLine)
 	}
+	return commitsDuringTask
+}
 
-	nextTask.IsChecked = true // Mark the task as completed
-
-	// Calculate total duration from all segments for this task
+func calculateTotalDuration(currentState *state.TimeBoxState, finalEndTime time.Time) time.Duration {
 	var totalDuration time.Duration
-	if currentState != nil {
-		for _, seg := range currentState.Segments {
-			if seg.End != nil {
-				totalDuration += seg.End.Sub(seg.Start)
-			} else {
-				// If the segment is still open, close it at finalEndTime
-				totalDuration += finalEndTime.Sub(seg.Start)
-			}
+	for _, seg := range currentState.Segments {
+		if seg.End != nil {
+			totalDuration += seg.End.Sub(seg.Start)
+		} else {
+			totalDuration += finalEndTime.Sub(seg.Start)
 		}
 	}
-
-	// Update the markdown file, passing totalDuration
-	err = parser.UpdateMarkdown(markdownFile, *nextTask, commitsDuringTask, totalDuration) // Use parser package
-
-	// Remove the TimeBoxState for the completed task from state and save
-	// (stateFile, states, taskHash already in scope)
-	var newStates []state.TimeBoxState
-	for _, s := range states {
-		if s.TaskHash != taskHash {
-			newStates = append(newStates, s)
-		}
-	}
-	writeState(newStates)
-
-	if err != nil {
-		return fmt.Errorf("Error updating markdown file: %v", err)
-	}
-
-	fmt.Println("\nTask completed and markdown updated!")
-	return nil
+	return totalDuration
 }
