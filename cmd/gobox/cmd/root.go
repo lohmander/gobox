@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"gobox/internal/core" // Import our new internal/core package
+	"gobox/internal/gitwatcher"
 	"gobox/internal/parser"
 	"gobox/internal/session"
 	"gobox/internal/state"
@@ -87,6 +89,8 @@ type model struct {
 	timerDone     bool
 	sessionRunner *session.SessionRunner
 	sessionState  *state.TimeBoxState
+	gitWatcher    *gitwatcher.GitWatcher
+	commits       []string
 }
 
 func initialModel(tasks []TaskItem, markdownFile string) model {
@@ -105,6 +109,7 @@ func (m model) Init() tea.Cmd {
 
 type tickMsg struct{}
 type sessionCompletedMsg struct{}
+type commitMsg string
 
 func sessionTickCmd(runner *session.SessionRunner) tea.Cmd {
 	return func() tea.Msg {
@@ -116,6 +121,17 @@ func sessionTickCmd(runner *session.SessionRunner) tea.Cmd {
 			case session.EventCompleted:
 				return sessionCompletedMsg{}
 			}
+		}
+	}
+}
+
+func watchCommitsCmd(gw *gitwatcher.GitWatcher) tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case commit := <-gw.Commits():
+			return commitMsg(commit)
+		case err := <-gw.Errors():
+			return commitMsg(fmt.Sprintf("Git error: %v", err))
 		}
 	}
 }
@@ -185,7 +201,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.timerDone = false
 						m.timerTask = item
 						runner.Start()
-						return m, sessionTickCmd(runner)
+						// Start GitWatcher
+						gw := gitwatcher.NewGitWatcher(time.Now(), 5*time.Second)
+						m.gitWatcher = gw
+						m.commits = nil
+						gw.Start()
+						return m, tea.Batch(sessionTickCmd(runner), watchCommitsCmd(gw))
 					}
 				}
 				return m, nil
@@ -201,11 +222,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.timer = 0
 			}
-			return m, sessionTickCmd(m.sessionRunner)
+			return m, tea.Batch(sessionTickCmd(m.sessionRunner), watchCommitsCmd(m.gitWatcher))
 		}
+	case commitMsg:
+		// Add new commit to the list
+		m.commits = append(m.commits, string(msg))
+		return m, watchCommitsCmd(m.gitWatcher)
 	case sessionCompletedMsg:
 		m.timerActive = false
 		m.timerDone = true
+		// Stop GitWatcher
+		if m.gitWatcher != nil {
+			m.gitWatcher.Stop()
+		}
 		return m, nil
 	}
 	if !m.timerActive {
@@ -218,16 +247,43 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // (removed parseDurationFromLine; now using parser.ParseTimeBox)
 
+func formatCommits(commits []string) string {
+	if len(commits) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	hashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
+	for _, c := range commits {
+		parts := strings.SplitN(c, " ", 2)
+		hash := parts[0]
+		msg := ""
+		if len(parts) > 1 {
+			msg = parts[1]
+		}
+		b.WriteString(hashStyle.Render(hash))
+		b.WriteString("  ")
+		b.WriteString(msgStyle.Render(msg))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 func (m model) View() string {
 	if m.quitting {
 		return "Goodbye!\n"
 	}
 	if m.timerActive {
+		commitSection := ""
+		if len(m.commits) > 0 {
+			commitSection = "\nCommits during session:\n" + formatCommits(m.commits)
+		}
 		return lipgloss.NewStyle().Padding(1).Render(
 			fmt.Sprintf(
-				"Working on: %s\nTime remaining: %s\n\nPress Enter to complete early.",
+				"Working on: %s\nTime remaining: %s\n\nPress Enter to complete early.%s",
 				m.timerTask.line,
 				m.timer.Round(time.Second).String(),
+				commitSection,
 			),
 		)
 	}
