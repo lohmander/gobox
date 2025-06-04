@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"gobox/internal/clock"   // Import clock abstraction
 	"gobox/internal/gitutil" // Import gitutil
 	"gobox/internal/parser"  // Import parser
 	"gobox/internal/state"   // Import state for timebox state management
@@ -54,14 +55,22 @@ func printCommit(commit string) {
 	currentCommitDisplayLine++
 }
 
-// timerAndGitWatcher manages the countdown and real-time commit display.
-func timerAndGitWatcher(taskDesc string, duration time.Duration, endTime time.Time, startTime time.Time, stopChan chan struct{}, wg *sync.WaitGroup) {
+// timerAndGitWatcher manages the countdown and real-time commit display, using a Clock for testability.
+func timerAndGitWatcher(
+	taskDesc string,
+	duration time.Duration,
+	endTime time.Time,
+	startTime time.Time,
+	stopChan chan struct{},
+	wg *sync.WaitGroup,
+	clk clock.Clock,
+) {
 	defer wg.Done()
 
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := clk.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	gitPollTicker := time.NewTicker(5 * time.Second) // Poll Git every 5 seconds
+	gitPollTicker := clk.NewTicker(5 * time.Second) // Poll Git every 5 seconds
 	defer gitPollTicker.Stop()
 
 	// Initial print of the task
@@ -77,11 +86,11 @@ func timerAndGitWatcher(taskDesc string, duration time.Duration, endTime time.Ti
 			printTimerStatus("Task finished!")
 			fmt.Println() // Move to a new line after final status
 			return
-		case <-ticker.C:
+		case <-ticker.C():
 			// Update timer display
 			var remaining time.Duration
 			if duration > 0 { // Duration-based timer
-				elapsed := time.Since(startTime)
+				elapsed := clk.Now().Sub(startTime)
 				remaining = duration - elapsed
 				if remaining <= 0 {
 					select {
@@ -92,7 +101,7 @@ func timerAndGitWatcher(taskDesc string, duration time.Duration, endTime time.Ti
 				}
 				printTimerStatus(fmt.Sprintf("Time remaining: %s", remaining.Round(time.Second)))
 			} else if !endTime.IsZero() { // Time-range based timer
-				remaining = time.Until(endTime)
+				remaining = endTime.Sub(clk.Now())
 				if remaining <= 0 {
 					select {
 					case stopChan <- struct{}{}: // Signal main to stop
@@ -103,7 +112,7 @@ func timerAndGitWatcher(taskDesc string, duration time.Duration, endTime time.Ti
 				printTimerStatus(fmt.Sprintf("Ends at: %s (Remaining: %s)", endTime.Format("15:04:05"), remaining.Round(time.Second)))
 			}
 
-		case <-gitPollTicker.C:
+		case <-gitPollTicker.C():
 			// Poll for new commits
 			commits, err := gitutil.GetCommitsSince(startTime) // Use gitutil package
 			if err != nil {
@@ -132,11 +141,19 @@ func timerAndGitWatcher(taskDesc string, duration time.Duration, endTime time.Ti
 }
 
 // StartGoBox is the main entry point for the GoBox application logic.
-func StartGoBox(markdownFile string) {
+// It returns an error or nil. The CLI should handle os.Exit.
+// Accepts an optional clock.Clock for testability; uses RealClock if nil.
+func StartGoBox(markdownFile string) error {
+	return StartGoBoxWithClock(markdownFile, clock.RealClock{})
+}
+
+func StartGoBoxWithClock(markdownFile string, clk clock.Clock) error {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
 	tasks, err := parser.ParseMarkdownFile(markdownFile) // Use parser package
 	if err != nil {
-		fmt.Printf("Error parsing markdown file: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error parsing markdown file: %w", err)
 	}
 
 	var nextTask *task.Task // Use task package
@@ -149,13 +166,12 @@ func StartGoBox(markdownFile string) {
 
 	if nextTask == nil {
 		fmt.Println("No unchecked tasks with time boxes found in the markdown file.")
-		os.Exit(0)
+		return nil // Not an error, just nothing to do
 	}
 
 	duration, endTime, err := parser.ParseTimeBox(nextTask.TimeBox) // Use parser package
 	if err != nil {
-		fmt.Printf("Error parsing time box '%s': %v\n", nextTask.TimeBox, err)
-		os.Exit(1)
+		return fmt.Errorf("Error parsing time box '%s': %v", nextTask.TimeBox, err)
 	}
 
 	// Determine effective duration/end time for the timer
@@ -168,11 +184,10 @@ func StartGoBox(markdownFile string) {
 		// If the end time is in the past, consider the task already done or for next day
 		if time.Until(actualEndTime) <= 0 {
 			fmt.Printf("Task '%s' with timebox '%s' is already past its end time. Skipping.\n", nextTask.Description, nextTask.TimeBox)
-			os.Exit(0)
+			return nil
 		}
 	} else {
-		fmt.Printf("Task '%s' has an invalid or unsupported timebox: %s\n", nextTask.Description, nextTask.TimeBox)
-		os.Exit(1)
+		return fmt.Errorf("Task '%s' has an invalid or unsupported timebox: %s", nextTask.Description, nextTask.TimeBox)
 	}
 
 	// --- STATE MANAGEMENT: Resume or start timebox state ---
@@ -196,7 +211,7 @@ func StartGoBox(markdownFile string) {
 			break
 		}
 	}
-	now := time.Now()
+	now := clk.Now()
 	if currentState == nil {
 		// No previous state, create new
 		states = append(states, state.TimeBoxState{
@@ -252,7 +267,6 @@ func StartGoBox(markdownFile string) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-
 	go func() {
 		sig := <-sigChan
 		fmt.Printf("\nReceived signal: %v. Pausing timebox and saving state...\n", sig)
@@ -283,14 +297,14 @@ func StartGoBox(markdownFile string) {
 			fmt.Println("Task has already used up its allocated timebox. Marking as done.")
 			nextTask.IsChecked = true
 			writeState(states)
-			return
+			return nil
 		}
 		timerDuration = actualDuration - elapsed
 	} else {
 		timerDuration = 0 // Not used for endTime-based
 	}
 
-	go timerAndGitWatcher(nextTask.Description, timerDuration, actualEndTime, timerStartTime, stopChan, &wg)
+	go timerAndGitWatcher(nextTask.Description, timerDuration, actualEndTime, timerStartTime, stopChan, &wg, clock.RealClock{})
 
 	// Wait for user input to finish early or timer to expire
 	reader := bufio.NewReader(os.Stdin)
@@ -304,6 +318,15 @@ func StartGoBox(markdownFile string) {
 	wg.Wait() // Wait for the goroutine to finish its cleanup
 
 	finalEndTime := time.Now() // Record the actual end time of the task
+
+	// --- Ensure the current segment is closed if still open ---
+	if currentState != nil && len(currentState.Segments) > 0 {
+		lastSeg := &currentState.Segments[len(currentState.Segments)-1]
+		if lastSeg.End == nil {
+			lastSeg.End = &finalEndTime
+			writeState(states)
+		}
+	}
 
 	// Fetch all commits made during the task's active period
 	allCommits, err := gitutil.GetCommitsSince(timerStartTime) // Use gitutil package
@@ -348,9 +371,9 @@ func StartGoBox(markdownFile string) {
 	writeState(newStates)
 
 	if err != nil {
-		fmt.Printf("Error updating markdown file: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error updating markdown file: %v", err)
 	}
 
 	fmt.Println("\nTask completed and markdown updated!")
+	return nil
 }
