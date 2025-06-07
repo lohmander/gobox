@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -13,8 +14,6 @@ import (
 	"gobox/internal/session"
 	"gobox/internal/state"
 	"gobox/pkg/task"
-
-	"fmt"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/table"
@@ -57,10 +56,11 @@ var tuiCmd = &cobra.Command{
 				continue // Skip checked tasks in the TUI
 			}
 
-			line := fmt.Sprintf("%s %s", t.Description, t.TimeBox)
+			line := fmt.Sprintf("%s %s", strings.TrimSpace(t.Description), strings.TrimSpace(t.TimeBox))
 			tasks = append(tasks, TaskItem{line: line, task: t})
 		}
-		p := tea.NewProgram(initialModel(tasks, markdownFile))
+		// Use a default height (will be updated on first WindowSizeMsg)
+		p := tea.NewProgram(initialModel(tasks, markdownFile, 24))
 
 		if _, err := p.Run(); err != nil {
 			fmt.Println("Error running TUI:", err)
@@ -93,20 +93,28 @@ type model struct {
 	gitWatcher    *gitwatcher.GitWatcher
 	commits       []string
 	commitTable   table.Model
+	height        int // Track terminal height for dynamic resizing
+	width         int // Track terminal width for dynamic resizing
 }
 
-func initialModel(tasks []TaskItem, markdownFile string) model {
+func initialModel(tasks []TaskItem, markdownFile string, height int) model {
 	items := make([]list.Item, len(tasks))
 	for i, t := range tasks {
 		items[i] = t
 	}
-	l := list.New(items, list.NewDefaultDelegate(), 40, 10)
+	// Use a default height and width if not set yet
+	listHeight := max(height-12, 5)
+	defaultWidth := 80
+	listDelegate := list.NewDefaultDelegate()
+	listDelegate.ShowDescription = false
+	l := list.New(items, listDelegate, defaultWidth, listHeight)
 	l.Title = markdownFile // Store the file path in the title for reloads
-	return model{list: l}
+	m := model{list: l, height: height, width: defaultWidth}
+	return m
 }
 
 func (m model) Init() tea.Cmd {
-	return nil
+	return tea.EnterAltScreen
 }
 
 type tickMsg struct{}
@@ -140,6 +148,15 @@ func watchCommitsCmd(gw *gitwatcher.GitWatcher) tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.height = msg.Height
+		m.width = msg.Width
+		listHeight := max(msg.Height-12, 5)
+		m.list.SetHeight(listHeight)
+		m.list.SetWidth(msg.Width)
+		m.commitTable.SetHeight(10)
+		m.commitTable.SetWidth(msg.Width)
+		return m, nil
 	case tea.KeyMsg:
 		if m.timerActive {
 			switch msg.String() {
@@ -174,7 +191,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if t.IsChecked {
 							continue // Skip checked tasks in the TUI
 						}
-						line := fmt.Sprintf("%s %s", t.Description, t.TimeBox)
+						line := fmt.Sprintf("%s %s", strings.TrimSpace(t.Description), strings.TrimSpace(t.TimeBox))
 						tasks = append(tasks, TaskItem{line: line, task: t})
 					}
 					items := make([]list.Item, len(tasks))
@@ -217,6 +234,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							table.WithRows([]table.Row{}),
 							table.WithFocused(false),
 						)
+						m.commitTable.SetWidth(m.width)
+						m.commitTable.SetHeight(10)
 						gw.Start()
 						return m, tea.Batch(sessionTickCmd(runner), watchCommitsCmd(gw))
 					}
@@ -248,7 +267,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		rows := append(m.commitTable.Rows(), table.Row{hash, msgStr})
 		m.commitTable.SetRows(rows)
-		m.commitTable.Blur() // Ensure table is unfocused so it doesn't take over the UI
+		// Only blur/focus on explicit user action (not here)
 		if len(rows) > 0 {
 			m.commitTable.SetCursor(len(rows) - 1)
 		}
@@ -265,9 +284,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !m.timerActive {
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
-		return m, cmd
+		// Always update the commitTable as well, so it can render/focus/scroll if needed
+		var tableCmd tea.Cmd
+		m.commitTable, tableCmd = m.commitTable.Update(msg)
+		return m, tea.Batch(cmd, tableCmd)
 	}
-	return m, nil
+	// Even if timer is active, update the commitTable for every message
+	var tableCmd tea.Cmd
+	m.commitTable, tableCmd = m.commitTable.Update(msg)
+	return m, tableCmd
 }
 
 // (removed parseDurationFromLine; now using parser.ParseTimeBox)
@@ -279,17 +304,16 @@ func (m model) View() string {
 		return "Goodbye!\n"
 	}
 	if m.timerActive {
-		commitSection := ""
-		if m.commitTable.Rows() != nil && len(m.commitTable.Rows()) > 0 {
-			commitSection = "\nCommits during session:\n" + m.commitTable.View()
-		}
-		return lipgloss.NewStyle().Padding(1).Render(
-			fmt.Sprintf(
-				"Working on: %s\nTime remaining: %s\n\nPress Enter to complete early.%s",
-				m.timerTask.line,
-				m.timer.Round(time.Second).String(),
-				commitSection,
+		return lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Padding(1).Render(
+				fmt.Sprintf(
+					"Working on: %s\nTime remaining: %s\n\nPress Enter to complete early.",
+					m.timerTask.line,
+					m.timer.Round(time.Second).String(),
+				),
 			),
+			lipgloss.NewStyle().Padding(1).Render("Commits during session:"),
+			m.commitTable.View(),
 		)
 	}
 	if m.timerDone {
@@ -300,7 +324,10 @@ func (m model) View() string {
 			fmt.Sprintf("Task completed!\n\nPress any key to return to the list."),
 		)
 	}
-	return lipgloss.NewStyle().Padding(1).Render(m.list.View())
+	return lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Padding(1).Render(m.list.View()),
+		m.commitTable.View(),
+	)
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
