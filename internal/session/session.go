@@ -203,3 +203,31 @@ func (sr *SessionRunner) TotalElapsed() time.Duration {
 	}
 	return elapsed
 }
+
+// Remaining returns the time remaining in the session.
+// For duration-based sessions, it returns the duration minus elapsed time.
+// For end-time-based sessions, it returns the time until the end time.
+// Returns zero if the session is complete or if no time limit is set.
+func (sr *SessionRunner) Remaining() time.Duration {
+	sr.Mutex.Lock()
+	defer sr.Mutex.Unlock()
+	
+	if sr.Completed {
+		return 0
+	}
+	
+	if sr.Duration > 0 {
+		elapsed := sr.TotalElapsed()
+		if elapsed >= sr.Duration {
+			return 0
+		}
+		return sr.Duration - elapsed
+	} else if !sr.EndTime.IsZero() {
+		remaining := sr.EndTime.Sub(time.Now())
+		if remaining < 0 {
+			return 0
+		}
+		return remaining
+	}
+	return 0
+}
