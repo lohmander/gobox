@@ -147,16 +147,27 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 		return m, nil
 		
 	case commitMsg:
-		// Add the commit message to our list
-		m.commits = append(m.commits, string(msg))
-		// Update the table rows
-		rows := make([]table.Row, len(m.commits))
-		for i, c := range m.commits {
-			rows[i] = table.Row{c}
+		// Add the commit message to our list if it's not a duplicate
+		newCommit := string(msg)
+		isDuplicate := false
+		for _, existingCommit := range m.commits {
+			if existingCommit == newCommit {
+				isDuplicate = true
+				break
+			}
 		}
-		// Only update the table if we have at least one column
-		if len(m.commitTable.Columns()) > 0 {
-			m.commitTable.SetRows(rows)
+		
+		if !isDuplicate {
+			m.commits = append(m.commits, newCommit)
+			// Update the table rows
+			rows := make([]table.Row, len(m.commits))
+			for i, c := range m.commits {
+				rows[i] = table.Row{c}
+			}
+			// Only update the table if we have at least one column
+			if len(m.commitTable.Columns()) > 0 {
+				m.commitTable.SetRows(rows)
+			}
 		}
 		return m, nil
 		
@@ -331,9 +342,39 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 						
 						// Initialize git watcher if not already set up
 						if m.gitWatcher == nil {
-							// Use the same time format as the core package does
-							watcher := gitwatcher.NewGitWatcher(now, 5*time.Second)
+							// For tasks with previous segments, get all commits since first segment
+							var startTime time.Time
+							if len(m.sessionState.Segments) > 0 {
+								// Use the start time of the first segment
+								startTime = m.sessionState.Segments[0].Start
+							} else {
+								// Use current time for new tasks
+								startTime = now
+							}
+							
+							watcher := gitwatcher.NewGitWatcher(startTime, 5*time.Second)
 							m.gitWatcher = watcher
+							
+							// Get any previous commits that happened between segments
+							if len(m.sessionState.Segments) > 1 {
+								// Fetch commits for all previous segments
+								previousCommits, _ := gitutil.GetCommitsSince(startTime)
+								for _, commit := range previousCommits {
+									m.commits = append(m.commits, commit)
+								}
+								
+								// Update the table with initial commits
+								if len(m.commits) > 0 {
+									rows := make([]table.Row, len(m.commits))
+									for i, c := range m.commits {
+										rows[i] = table.Row{c}
+									}
+									if len(m.commitTable.Columns()) > 0 {
+										m.commitTable.SetRows(rows)
+									}
+								}
+							}
+							
 							watcher.Start()
 							
 							// Make sure the commit table is initialized with proper columns

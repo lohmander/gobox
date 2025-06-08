@@ -56,6 +56,44 @@ func GetCommitsSince(since time.Time) ([]string, error) {
 	return commits, nil
 }
 
+// GetCommitsBetween fetches git commits between multiple time ranges.
+// Each range consists of a start and end time. For ongoing segments (where end is nil),
+// commits up to the current time are included.
+// The function returns unique commits across all segments.
+func GetCommitsBetween(segments []time.Time) ([]string, error) {
+	uniqueCommits := make(map[string]struct{})
+	var allCommits []string
+
+	// We need at least one time to start with
+	if len(segments) == 0 {
+		return nil, fmt.Errorf("at least one time segment is required")
+	}
+
+	// Use standard git log to get all commits since the earliest time
+	earliestTime := segments[0]
+	for _, t := range segments[1:] {
+		if t.Before(earliestTime) {
+			earliestTime = t
+		}
+	}
+
+	// Get all commits since the earliest time
+	commits, err := GetCommitsSince(earliestTime)
+	if err != nil {
+		return nil, err
+	}
+
+	// Process all commits and keep unique ones
+	for _, commit := range commits {
+		if _, exists := uniqueCommits[commit]; !exists {
+			uniqueCommits[commit] = struct{}{}
+			allCommits = append(allCommits, commit)
+		}
+	}
+
+	return allCommits, nil
+}
+
 // For testing, we'll add a function to set a mock runner
 func SetRunner(r CommandRunner) {
 	runner = r
