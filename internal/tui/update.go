@@ -8,6 +8,7 @@ import (
 	"gobox/internal/gitwatcher"
 	"gobox/internal/gitutil"
 	"gobox/internal/parser"
+	"gobox/internal/rewrite"
 	"gobox/internal/session"
 	"gobox/internal/state"
 
@@ -94,16 +95,16 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 	case sessionCompletedMsg:
 		m.timerActive = false
 		m.timerDone = true
-		
+	
 		// Save state when timer is completed
 		if m.sessionState != nil {
 			now := time.Now()
-			
+		
 			// Ensure the last segment is closed
 			if len(m.sessionState.Segments) > 0 && m.sessionState.Segments[len(m.sessionState.Segments)-1].End == nil {
 				m.sessionState.Segments[len(m.sessionState.Segments)-1].End = &now
 			}
-			
+		
 			// Calculate the total duration spent on this task
 			var totalDuration time.Duration
 			for _, seg := range m.sessionState.Segments {
@@ -113,24 +114,15 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 					totalDuration += now.Sub(seg.Start)
 				}
 			}
-			
+		
 			// Get any commits made during the task
 			startTime := m.sessionState.Segments[0].Start
-			commitsDuringTask, err := gitutil.GetCommitsSince(startTime)
+			_, err := gitutil.GetCommitsSince(startTime)
 			if err != nil {
 				// Handle git error silently - not all users have git repositories
-				commitsDuringTask = []string{}
 			}
-			
-			// Set the task as completed
-			if markdownFile := m.list.Title; markdownFile != "" {
-				updatedTask := m.timerTask.task
-				updatedTask.IsChecked = true
-				
-				// Update the markdown file with completion status, commits, and duration
-				_ = parser.UpdateMarkdown(markdownFile, updatedTask, commitsDuringTask, totalDuration)
-			}
-			
+		
+			// Don't update markdown file here - wait for user confirmation
 			_ = m.stateMgr.Save(m.states)
 		}
 		return m, nil
@@ -173,17 +165,43 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 			// Let the user see the completion message before proceeding
 			switch msg.String() {
 			case "enter", " ":
-				m.timerDone = false
-				
-				// When returning to list, reload tasks to show the updated markdown
-				if m.stateMgr != nil {
-					// Remove the completed task from states
-					if m.sessionState != nil {
-						m.states = m.stateMgr.RemoveTaskState(m.states, m.sessionState.TaskHash)
-						_ = m.stateMgr.Save(m.states)
-						m.sessionState = nil
+				// User confirmed completion - now update the markdown file
+				if m.sessionState != nil && m.list.Title != "" {
+					now := time.Now()
+					
+					// Calculate total duration
+					var totalDuration time.Duration
+					for _, seg := range m.sessionState.Segments {
+						if seg.End != nil {
+							totalDuration += seg.End.Sub(seg.Start)
+						} else {
+							totalDuration += now.Sub(seg.Start)
+						}
 					}
+					
+					// Get commits for the task duration
+					startTime := m.sessionState.Segments[0].Start
+					commitsDuringTask, _ := gitutil.GetCommitsSince(startTime)
+					
+					// Update the markdown file
+					updatedTask := m.timerTask.task
+					updatedTask.IsChecked = true
+				
+					markdownFile := m.list.Title
+				
+					// Use the direct task update method that works with description matching
+					updateErr := rewrite.UpdateTaskWithState(markdownFile, updatedTask, totalDuration, commitsDuringTask)
+					if updateErr != nil {
+						// Handle error silently - logging removed
+					}
+					
+					// When returning to list, remove the task from states
+					m.states = m.stateMgr.RemoveTaskState(m.states, m.sessionState.TaskHash)
+					_ = m.stateMgr.Save(m.states)
+					m.sessionState = nil
 				}
+				
+				m.timerDone = false
 			default:
 				return m, nil
 			}
@@ -284,6 +302,7 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 						m.sessionRunner = runner
 						m.timerTotal = duration
 						m.timer = duration
+						m.timerTask = item
 						
 						// Start the runner
 						runner.Start()

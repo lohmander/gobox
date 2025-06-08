@@ -55,8 +55,11 @@ func ModelView(m model) string {
 	if m.timerDone {
 		// Show completion message and return to list after a keypress
 		successStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00FF00"))
+		instructionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFF00"))
 		return lipgloss.NewStyle().Padding(1).BorderStyle(lipgloss.DoubleBorder()).Render(
-			fmt.Sprintf("%s\n\nPress any key to return to the list.", successStyle.Render("✅ Task completed successfully!")),
+			fmt.Sprintf("%s\n\n%s", 
+				successStyle.Render("✅ Task completed successfully!"),
+				instructionStyle.Render("Press Enter or Space to mark as complete and return to the list.")),
 		)
 	}
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00FFFF"))
@@ -69,7 +72,7 @@ func ModelView(m model) string {
 		
 	helpText := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#888888")).
-		Render("Press Enter to start a task. Press q or Ctrl+C to quit.")
+		Render("↑/↓: Navigate tasks | Enter: Start selected task | q/Ctrl+C: Quit")
 		
 	// Only include commit table in view if it has columns
 	commitTableView := ""
