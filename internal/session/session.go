@@ -62,6 +62,9 @@ func (sr *SessionRunner) Start() {
 	sr.wg.Add(1)
 	sr.Mutex.Unlock()
 
+	// Send initial tick immediately to update UI
+	sr.eventCh <- EventTick
+
 	go func() {
 		defer sr.wg.Done()
 		for {
@@ -147,6 +150,7 @@ func (sr *SessionRunner) Complete() {
 	sr.Completed = true
 	if sr.Ticker != nil {
 		sr.Ticker.Stop()
+		sr.Ticker = nil
 	}
 	
 	// Prevent panics from double-closing the channel
@@ -221,6 +225,9 @@ func (sr *SessionRunner) Events() <-chan SessionEvent {
 
 // isTimeUp checks if the session has reached its duration or end time.
 func (sr *SessionRunner) isTimeUp() bool {
+	sr.Mutex.Lock()
+	defer sr.Mutex.Unlock()
+	
 	if sr.Duration > 0 {
 		var elapsed time.Duration
 		for _, seg := range sr.State.Segments {

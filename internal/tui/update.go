@@ -90,12 +90,26 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 	case tickMsg:
 		// Update timer display
 		if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
-			m.timer = runner.Remaining()
-			if m.timer < 0 {
-				m.timer = 0
+			if !m.timerDone {
+				// For duration-based timers, count down
+				if m.timerTotal > 0 {
+					elapsed := runner.TotalElapsed()
+					m.timer = m.timerTotal - elapsed
+					if m.timer < 0 {
+						m.timer = 0
+					}
+				} else {
+					// For end-time based timers
+					m.timer = runner.Remaining()
+					if m.timer < 0 {
+						m.timer = 0
+					}
+				}
 			}
 		}
-		return m, nil
+		return m, tea.Tick(time.Second, func(t time.Time) tea.Msg {
+			return tickMsg{}
+		})
 		
 	case sessionCompletedMsg:
 		m.timerActive = false
