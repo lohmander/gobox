@@ -10,8 +10,9 @@ import (
 // and the list of time segments (work intervals) associated with it.
 // This struct is designed to be serializable for persistence between sessions.
 type TimeBoxState struct {
-	TaskHash string        `json:"task_hash"` // Unique hash of the task
-	Segments []TimeSegment `json:"segments"`  // List of time segments
+	TaskHash  string        `json:"task_hash"`  // Unique hash of the task
+	Segments  []TimeSegment `json:"segments"`   // List of time segments
+	Completed bool          `json:"completed"`  // Whether the task is completed
 }
 
 // TimeSegment represents a single uninterrupted interval of work within a timebox.

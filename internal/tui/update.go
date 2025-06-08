@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gobox/internal/gitwatcher"
+	"gobox/internal/gitutil"
 	"gobox/internal/parser"
 	"gobox/internal/session"
 	"gobox/internal/state"
@@ -59,6 +60,14 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 			}
 			_ = m.stateMgr.Save(m.states)
 			return m, tea.Quit
+		} else if k == "enter" && m.timerActive {
+			// Complete timer early when enter is pressed during active timer
+			if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
+				runner.Complete()
+				m.timerActive = false
+				m.timerDone = true
+				return m, nil
+			}
 		}
 	}
 	switch msg := msg.(type) {
@@ -85,6 +94,45 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 	case sessionCompletedMsg:
 		m.timerActive = false
 		m.timerDone = true
+		
+		// Save state when timer is completed
+		if m.sessionState != nil {
+			now := time.Now()
+			
+			// Ensure the last segment is closed
+			if len(m.sessionState.Segments) > 0 && m.sessionState.Segments[len(m.sessionState.Segments)-1].End == nil {
+				m.sessionState.Segments[len(m.sessionState.Segments)-1].End = &now
+			}
+			
+			// Calculate the total duration spent on this task
+			var totalDuration time.Duration
+			for _, seg := range m.sessionState.Segments {
+				if seg.End != nil {
+					totalDuration += seg.End.Sub(seg.Start)
+				} else {
+					totalDuration += now.Sub(seg.Start)
+				}
+			}
+			
+			// Get any commits made during the task
+			startTime := m.sessionState.Segments[0].Start
+			commitsDuringTask, err := gitutil.GetCommitsSince(startTime)
+			if err != nil {
+				// Handle git error silently - not all users have git repositories
+				commitsDuringTask = []string{}
+			}
+			
+			// Set the task as completed
+			if markdownFile := m.list.Title; markdownFile != "" {
+				updatedTask := m.timerTask.task
+				updatedTask.IsChecked = true
+				
+				// Update the markdown file with completion status, commits, and duration
+				_ = parser.UpdateMarkdown(markdownFile, updatedTask, commitsDuringTask, totalDuration)
+			}
+			
+			_ = m.stateMgr.Save(m.states)
+		}
 		return m, nil
 		
 	case commitMsg:
@@ -119,11 +167,26 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 				return m, nil
 			}
 		} else if m.timerDone {
-			// Mark the task as checked in the Markdown file using core.CompleteTask with TimeBoxState
-			if m.sessionState != nil {
-				// This should be handled by a callback or in the main tui.go Run function.
+			// Task is already completed in sessionCompletedMsg handler
+			// Here we just handle returning to the task list
+			
+			// Let the user see the completion message before proceeding
+			switch msg.String() {
+			case "enter", " ":
+				m.timerDone = false
+				
+				// When returning to list, reload tasks to show the updated markdown
+				if m.stateMgr != nil {
+					// Remove the completed task from states
+					if m.sessionState != nil {
+						m.states = m.stateMgr.RemoveTaskState(m.states, m.sessionState.TaskHash)
+						_ = m.stateMgr.Save(m.states)
+						m.sessionState = nil
+					}
+				}
+			default:
+				return m, nil
 			}
-			m.timerDone = false
 			// Reload tasks from markdown file
 			if m.list.Title != "" {
 				parsedTasks, err := parser.ParseMarkdownFile(m.list.Title)
@@ -227,6 +290,7 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 						
 						// Initialize git watcher if not already set up
 						if m.gitWatcher == nil {
+							// Use the same time format as the core package does
 							watcher := gitwatcher.NewGitWatcher(now, 5*time.Second)
 							m.gitWatcher = watcher
 							watcher.Start()
