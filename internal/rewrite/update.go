@@ -1,7 +1,7 @@
 package rewrite
 
 import (
-	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"regexp"
@@ -20,63 +20,75 @@ func MarkTaskAsCompleted(
 	commits []string,
 ) error {
 	// Read the file
-	file, err := os.Open(markdownFile)
+	content, err := os.ReadFile(markdownFile)
 	if err != nil {
 		return fmt.Errorf("failed to open markdown file: %w", err)
 	}
-	defer file.Close()
 
-	// Read file line by line to find and replace task
-	scanner := bufio.NewScanner(file)
-	var lines []string
-	taskFound := false
+	// Create a rewriter to modify the content
+	lineOffsets := BuildLineOffsets(content)
+	rewriter := NewScannerRewriter(bytes.NewReader(content), lineOffsets)
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		
-		// Check if this line is our task
-		if !taskFound && isTaskLine(line, taskDesc) {
-			// Convert "[ ]" to "[x]" to mark as completed
-			line = strings.Replace(line, "[ ]", "[x]", 1)
-			taskFound = true
-			
-			// Add duration info
-			if totalDuration > 0 {
-				hours := int(totalDuration.Hours())
-				minutes := int(totalDuration.Minutes()) % 60
-				seconds := int(totalDuration.Seconds()) % 60
-				line = fmt.Sprintf("%s  ⏱️ %dh %dm %ds", line, hours, minutes, seconds)
-			}
-			
-			lines = append(lines, line)
-			
-			// Add commit information if available
-			if len(commits) > 0 {
-				lines = append(lines, "")
-				lines = append(lines, "  Commits:")
-				for _, commit := range commits {
-					lines = append(lines, fmt.Sprintf("  - %s", commit))
-				}
-			}
-		} else {
-			lines = append(lines, line)
+	// Find the task line
+	lines := bytes.Split(content, []byte("\n"))
+	taskLineIndex := -1
+	for i, line := range lines {
+		if isTaskLine(string(line), taskDesc) {
+			taskLineIndex = i
+			break
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading markdown file: %w", err)
-	}
-
-	if !taskFound {
+	if taskLineIndex == -1 {
 		return fmt.Errorf("task not found in markdown file: %s", taskDesc)
 	}
 
-	// Write the modified content back to the file
-	err = os.WriteFile(markdownFile, []byte(strings.Join(lines, "\n")), 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write updated markdown file: %w", err)
+	// Copy the content up to the task line
+	if err := rewriter.CopyLinesUntil(taskLineIndex); err != nil {
+		return fmt.Errorf("error copying lines: %w", err)
 	}
 
+	// Create the modified line content
+	var newLines [][]byte
+	
+	// Update the task line to mark it as completed
+	taskLine := string(lines[taskLineIndex])
+	taskLine = strings.Replace(taskLine, "[ ]", "[x]", 1)
+	
+	// Add duration information if available
+	if totalDuration > 0 {
+		hours := int(totalDuration.Hours())
+		minutes := int(totalDuration.Minutes()) % 60
+		seconds := int(totalDuration.Seconds()) % 60
+		taskLine = fmt.Sprintf("%s  ⏱️ %dh %dm %ds", taskLine, hours, minutes, seconds)
+	}
+	
+	newLines = append(newLines, []byte(taskLine))
+	
+	// Add commit information if available
+	if len(commits) > 0 {
+		newLines = append(newLines, []byte(""))
+		newLines = append(newLines, []byte("  Commits:"))
+		for _, commit := range commits {
+			newLines = append(newLines, []byte(fmt.Sprintf("  - %s", commit)))
+		}
+	}
+	
+	// Replace the original task line with our new content
+	if err := rewriter.ReplaceLines(taskLineIndex, taskLineIndex, newLines); err != nil {
+		return fmt.Errorf("error replacing lines: %w", err)
+	}
+	
+	// Copy any remaining lines
+	if err := rewriter.CopyRemainingLines(); err != nil {
+		return fmt.Errorf("error copying remaining lines: %w", err)
+	}
+	
+	// Write the modified content back to the file
+	if err := os.WriteFile(markdownFile, rewriter.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write updated markdown file: %w", err)
+	}
+	
 	return nil
 }
 
