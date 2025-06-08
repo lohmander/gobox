@@ -55,12 +55,25 @@ func initialModel(tasks []TaskItem, markdownFile string, height int, stateMgr co
 	l := list.New(items, listDelegate, defaultWidth, listHeight)
 	// Remove default quit keys so we handle q/ctrl+c ourselves
 	l.Title = markdownFile // Store the file path in the title for reloads
+	// Initialize the commit table with a single column for commit messages
+	columns := []table.Column{
+		{Title: "Commit", Width: defaultWidth - 4},
+	}
+	t := table.New(
+		table.WithColumns(columns),
+		table.WithRows([]table.Row{}),
+		table.WithFocused(false),
+		table.WithHeight(10),
+	)
+	
 	m := model{
-		list:     l,
-		height:   height,
-		width:    defaultWidth,
-		stateMgr: stateMgr,
-		states:   states,
+		list:        l,
+		height:      height,
+		width:       defaultWidth,
+		stateMgr:    stateMgr,
+		states:      states,
+		commitTable: t,
+		commits:     []string{},
 	}
 	return m
 }

@@ -95,7 +95,10 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 		for i, c := range m.commits {
 			rows[i] = table.Row{c}
 		}
-		m.commitTable.SetRows(rows)
+		// Only update the table if we have at least one column
+		if len(m.commitTable.Columns()) > 0 {
+			m.commitTable.SetRows(rows)
+		}
 		return m, nil
 		
 	case tea.KeyMsg:
@@ -227,12 +230,25 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 							watcher := gitwatcher.NewGitWatcher(now, 5*time.Second)
 							m.gitWatcher = watcher
 							watcher.Start()
+							
+							// Make sure the commit table is initialized with proper columns
+							if len(m.commitTable.Columns()) == 0 {
+								columns := []table.Column{
+									{Title: "Commit", Width: m.width - 4},
+								}
+								m.commitTable = table.New(
+									table.WithColumns(columns),
+									table.WithRows([]table.Row{}),
+									table.WithFocused(false),
+									table.WithHeight(10),
+								)
+							}
 						}
 						
 						// Return commands for handling session tick events and git commits
 						var cmds []tea.Cmd
 						cmds = append(cmds, sessionTickCmd(runner))
-						if watcher, ok := m.gitWatcher.(*gitwatcher.GitWatcher); ok {
+						if watcher, ok := m.gitWatcher.(*gitwatcher.GitWatcher); ok && watcher != nil {
 							cmds = append(cmds, watchCommitsCmd(watcher))
 						}
 						

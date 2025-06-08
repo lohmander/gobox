@@ -38,7 +38,12 @@ func ModelView(m model) string {
 			),
 		)
 		commitsBlock := lipgloss.NewStyle().Padding(1).Render(headerStyle.Render("Commits during session:"))
-		commitTableBlock := m.commitTable.View()
+		
+		// Only render commit table if it has columns and rows
+		commitTableBlock := ""
+		if len(m.commitTable.Columns()) > 0 {
+			commitTableBlock = m.commitTable.View()
+		}
 
 		content := lipgloss.JoinVertical(lipgloss.Left, timerBlock, commitsBlock, commitTableBlock)
 		contentLines := strings.Count(content, "\n") + 1
@@ -66,10 +71,16 @@ func ModelView(m model) string {
 		Foreground(lipgloss.Color("#888888")).
 		Render("Press Enter to start a task. Press q or Ctrl+C to quit.")
 		
+	// Only include commit table in view if it has columns
+	commitTableView := ""
+	if len(m.commitTable.Columns()) > 0 {
+		commitTableView = m.commitTable.View()
+	}
+	
 	return lipgloss.JoinVertical(lipgloss.Left,
 		taskList,
 		helpText,
 		headerStyle.Render("Recent commits:"),
-		m.commitTable.View(),
+		commitTableView,
 	)
 }
