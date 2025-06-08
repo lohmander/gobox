@@ -56,12 +56,17 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 		k := msg.String()
 		if k == "ctrl+c" || k == "q" {
 			m.quitting = true
-			if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
-				runner.Stop()
+			// Only attempt to stop the session runner if we're in an active timer
+			if m.timerActive {
+				if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
+					runner.Stop()
+				}
 			}
 			_ = m.stateMgr.Save(m.states)
 			return m, tea.Quit
-		} else if k == "enter" && m.timerActive {
+		}
+	
+		if k == "enter" && m.timerActive {
 			// Complete timer early when enter is pressed during active timer
 			if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
 				runner.Complete()
@@ -147,7 +152,10 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 			case "ctrl+c", "q":
 				m.quitting = true
 				if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
-					runner.Stop()
+					// Safe stop that won't panic if channels are closed
+					if m.timerActive {
+						runner.Stop()
+					}
 				}
 				_ = m.stateMgr.Save(m.states)
 				return m, tea.Quit

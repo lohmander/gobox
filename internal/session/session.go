@@ -148,19 +148,65 @@ func (sr *SessionRunner) Complete() {
 	if sr.Ticker != nil {
 		sr.Ticker.Stop()
 	}
-	close(sr.stopCh)
-	sr.eventCh <- EventCompleted
+	
+	// Prevent panics from double-closing the channel
+	select {
+	case _, ok := <-sr.stopCh:
+		if !ok {
+			// Channel already closed, don't close again or send event
+			return
+		}
+		// Channel still open, close it
+		close(sr.stopCh)
+	default:
+		// Channel still open, close it
+		close(sr.stopCh)
+	}
+	
+	// Only send event if channel is not full
+	select {
+	case sr.eventCh <- EventCompleted:
+		// Successfully sent event
+	default:
+		// Cannot send, channel might be full or closed
+	}
 }
 
 // Stop ends the session without marking it as completed.
 func (sr *SessionRunner) Stop() {
 	sr.Mutex.Lock()
 	defer sr.Mutex.Unlock()
+	
+	// If already completed, don't do anything
+	if sr.Completed {
+		return
+	}
+	
 	if sr.Ticker != nil {
 		sr.Ticker.Stop()
 	}
-	close(sr.stopCh)
-	sr.eventCh <- EventStopped
+	
+	// Prevent panics from double-closing the channel
+	select {
+	case _, ok := <-sr.stopCh:
+		if !ok {
+			// Channel already closed, don't close again
+			return
+		}
+		// Channel still open, close it
+		close(sr.stopCh)
+	default:
+		// Channel still open, close it
+		close(sr.stopCh)
+	}
+	
+	// Only send event if stopCh was closed by us
+	select {
+	case sr.eventCh <- EventStopped:
+		// Successfully sent event
+	default:
+		// Cannot send, channel might be full or closed
+	}
 }
 
 // Wait blocks until the session goroutine(s) have finished.
