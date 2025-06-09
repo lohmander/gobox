@@ -136,10 +136,28 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 				}
 			}
 
-			// Get any commits made during the task
-			startTime := m.sessionState.Segments[0].Start
-			_, err := gitutil.GetCommitsSince(startTime)
-			if err != nil {
+			// Get all commits in completed segments
+			if _, err := func() ([]string, error) {
+				var allCommits []string
+				commitSet := make(map[string]struct{})
+
+				for _, seg := range m.sessionState.Segments {
+					if seg.End == nil {
+						continue
+					}
+					commits, err := gitutil.GetCommitsBetweenTimeRange(seg.Start, *seg.End)
+					if err != nil {
+						return nil, err
+					}
+					for _, c := range commits {
+						if _, exists := commitSet[c]; !exists {
+							commitSet[c] = struct{}{}
+							allCommits = append(allCommits, c)
+						}
+					}
+				}
+				return allCommits, nil
+			}(); err != nil {
 				// Handle git error silently - not all users have git repositories
 			}
 
@@ -213,9 +231,29 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 					}
 
 					// Get commits for the task duration
-					startTime := m.sessionState.Segments[0].Start
-					commitsDuringTask, _ := gitutil.GetCommitsSince(startTime)
+					
+					commitsDuringTask, _ := func() ([]string, error) {
+						var allCommits []string
+						commitSet := make(map[string]struct{})
 
+						for _, seg := range m.sessionState.Segments {
+							if seg.End == nil {
+								continue
+							}
+							commits, err := gitutil.GetCommitsBetweenTimeRange(seg.Start, *seg.End)
+							if err != nil {
+								return nil, err
+							}
+							for _, c := range commits {
+								if _, exists := commitSet[c]; !exists {
+									commitSet[c] = struct{}{}
+									allCommits = append(allCommits, c)
+								}
+							}
+						}
+						return allCommits, nil
+					}()
+					
 					// Update the markdown file
 					updatedTask := m.timerTask.task
 					updatedTask.IsChecked = true
@@ -355,12 +393,23 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 							watcher := gitwatcher.NewGitWatcher(startTime, 5*time.Second)
 							m.gitWatcher = watcher
 
-							// Get any previous commits that happened between segments
+							// Get any previous commits that happened between completed segments
 							if len(m.sessionState.Segments) > 1 {
-								// Fetch commits for all previous segments
-								previousCommits, _ := gitutil.GetCommitsSince(startTime)
-								for _, commit := range previousCommits {
-									m.commits = append(m.commits, commit)
+								commitSet := make(map[string]struct{})
+								for _, seg := range m.sessionState.Segments {
+									if seg.End == nil {
+										continue
+									}
+									commits, err := gitutil.GetCommitsBetweenTimeRange(seg.Start, *seg.End)
+									if err != nil {
+										continue
+									}
+									for _, commit := range commits {
+										if _, exists := commitSet[commit]; !exists {
+											commitSet[commit] = struct{}{}
+											m.commits = append(m.commits, commit)
+										}
+									}
 								}
 
 								// Update the table with initial commits
