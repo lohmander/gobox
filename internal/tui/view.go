@@ -14,31 +14,31 @@ func ModelView(m model) string {
 	}
 	if m.timerActive {
 		headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00FFFF"))
-		
-		timeStr := m.timer.Round(1e9).String() // time.Second
+
+		timeStr := m.timer.Round(1e9).String()  // time.Second
 		timerColor := lipgloss.Color("#00FF00") // green for normal time
-		
+
 		// Change timer color to yellow when less than 20% time remains
 		if m.timerTotal > 0 && m.timer < m.timerTotal/5 {
 			timerColor = lipgloss.Color("#FFFF00")
 		}
-		
+
 		// Change timer color to red when less than 10% time remains
 		if m.timerTotal > 0 && m.timer < m.timerTotal/10 {
 			timerColor = lipgloss.Color("#FF0000")
 		}
-		
+
 		timerStyle := lipgloss.NewStyle().Foreground(timerColor).Bold(true)
-		
+
 		timerBlock := lipgloss.NewStyle().Padding(1).BorderStyle(lipgloss.RoundedBorder()).Render(
 			fmt.Sprintf(
 				"%s\n%s\n\nPress Enter to complete early or q/Ctrl+C to quit.",
-				headerStyle.Render("Working on: ") + m.timerTask.line,
-				headerStyle.Render("Time remaining: ") + timerStyle.Render(timeStr),
+				headerStyle.Render("Working on: ")+m.timerTask.line,
+				headerStyle.Render("Time remaining: ")+timerStyle.Render(timeStr),
 			),
 		)
 		commitsBlock := lipgloss.NewStyle().Padding(1).Render(headerStyle.Render("Commits during session:"))
-		
+
 		// Only render commit table if it has columns and rows
 		commitTableBlock := ""
 		if len(m.commitTable.Columns()) > 0 {
@@ -57,33 +57,19 @@ func ModelView(m model) string {
 		successStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00FF00"))
 		instructionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFF00"))
 		return lipgloss.NewStyle().Padding(1).BorderStyle(lipgloss.DoubleBorder()).Render(
-			fmt.Sprintf("%s\n\n%s", 
+			fmt.Sprintf("%s\n\n%s",
 				successStyle.Render("✅ Task completed successfully!"),
 				instructionStyle.Render("Press Enter or Space to mark as complete and return to the list.")),
 		)
 	}
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00FFFF"))
-	
+
 	taskList := lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#555555")).
 		Padding(1).
 		Render(m.list.View())
-		
-	helpText := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
-		Render("↑/↓: Navigate tasks | Enter: Start selected task | q/Ctrl+C: Quit")
-		
-	// Only include commit table in view if it has columns
-	commitTableView := ""
-	if len(m.commitTable.Columns()) > 0 {
-		commitTableView = m.commitTable.View()
-	}
-	
+
 	return lipgloss.JoinVertical(lipgloss.Left,
 		taskList,
-		helpText,
-		headerStyle.Render("Recent commits:"),
-		commitTableView,
 	)
 }
