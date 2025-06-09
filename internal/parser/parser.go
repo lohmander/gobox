@@ -214,7 +214,7 @@ func UpdateMarkdown(
 					hours := int(totalDuration.Hours())
 					minutes := int(totalDuration.Minutes()) % 60
 					seconds := int(totalDuration.Seconds()) % 60
-					durationStr := fmt.Sprintf("  ⏱️ %dh %dm %ds", hours, minutes, seconds)
+					durationStr := fmt.Sprintf("\n⏱️ %dh %dm %ds", hours, minutes, seconds)
 					taskText = append(taskText, []byte(durationStr))
 				}
 
