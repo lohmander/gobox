@@ -21,17 +21,19 @@ const (
 
 // SessionRunner manages a timeboxed session for a task, including pause/resume and segment tracking.
 type SessionRunner struct {
-	Task         task.Task
-	State        *state.TimeBoxState
-	Duration     time.Duration // total timebox duration (if duration-based)
-	EndTime      time.Time     // absolute end time (if time-range-based)
-	Ticker       *time.Ticker
-	Mutex        sync.Mutex
-	Paused       bool
-	Completed    bool
-	eventCh      chan SessionEvent
-	stopCh       chan struct{}
-	wg           sync.WaitGroup
+	Task                     task.Task
+	State                    *state.TimeBoxState
+	Duration                 time.Duration // total timebox duration (if duration-based)
+	EndTime                  time.Time     // absolute end time (if time-range-based)
+	ticker                   *time.Ticker
+	Mutex                    sync.Mutex
+	Paused                   bool
+	Completed                bool
+	eventCh                  chan SessionEvent
+	stopCh                   chan struct{}
+	wg                       sync.WaitGroup
+	lastTick                 time.Time
+	previousSegmentsDuration time.Duration // cached sum of closed segments durations
 }
 
 // NewSessionRunner creates a new session runner for a task and its state.
@@ -58,7 +60,16 @@ func (sr *SessionRunner) Start() {
 		now := time.Now()
 		sr.State.Segments = append(sr.State.Segments, state.TimeSegment{Start: now, End: nil})
 	}
-	sr.Ticker = time.NewTicker(1 * time.Second)
+	// Calculate and cache previous segments duration on start
+	sr.previousSegmentsDuration = 0
+	for _, seg := range sr.State.Segments {
+		if seg.End != nil {
+			sr.previousSegmentsDuration += seg.End.Sub(seg.Start)
+		}
+	}
+	// Initialize lastTick to now
+	sr.lastTick = time.Now()
+	sr.ticker = time.NewTicker(1 * time.Second)
 	sr.wg.Add(1)
 	sr.Mutex.Unlock()
 
@@ -69,8 +80,18 @@ func (sr *SessionRunner) Start() {
 		defer sr.wg.Done()
 		for {
 			select {
-			case <-sr.Ticker.C:
-				sr.eventCh <- EventTick
+			case tickTime := <-sr.ticker.C:
+				sr.Mutex.Lock()
+				// Update lastTick
+				sr.lastTick = tickTime
+				sr.Mutex.Unlock()
+
+				select {
+				case sr.eventCh <- EventTick:
+				default:
+					// drop tick event if channel is full
+				}
+
 				if sr.isTimeUp() {
 					sr.Complete()
 					return
@@ -97,8 +118,8 @@ func (sr *SessionRunner) Pause() {
 		}
 	}
 	sr.Paused = true
-	if sr.Ticker != nil {
-		sr.Ticker.Stop()
+	if sr.ticker != nil {
+		sr.ticker.Stop()
 	}
 	sr.eventCh <- EventPaused
 }
@@ -112,15 +133,32 @@ func (sr *SessionRunner) Resume() {
 	}
 	now := time.Now()
 	sr.State.Segments = append(sr.State.Segments, state.TimeSegment{Start: now, End: nil})
+	// Calculate and cache previous segments duration on resume
+	sr.previousSegmentsDuration = 0
+	for _, seg := range sr.State.Segments {
+		if seg.End != nil {
+			sr.previousSegmentsDuration += seg.End.Sub(seg.Start)
+		}
+	}
 	sr.Paused = false
-	sr.Ticker = time.NewTicker(1 * time.Second)
+	sr.ticker = time.NewTicker(1 * time.Second)
 	sr.wg.Add(1)
 	go func() {
 		defer sr.wg.Done()
 		for {
 			select {
-			case <-sr.Ticker.C:
-				sr.eventCh <- EventTick
+			case tickTime := <-sr.ticker.C:
+				sr.Mutex.Lock()
+				// Update lastTick
+				sr.lastTick = tickTime
+				sr.Mutex.Unlock()
+
+				select {
+				case sr.eventCh <- EventTick:
+				default:
+					// drop tick event if channel is full
+				}
+
 				if sr.isTimeUp() {
 					sr.Complete()
 					return
@@ -148,9 +186,9 @@ func (sr *SessionRunner) Complete() {
 		}
 	}
 	sr.Completed = true
-	if sr.Ticker != nil {
-		sr.Ticker.Stop()
-		sr.Ticker = nil
+	if sr.ticker != nil {
+		sr.ticker.Stop()
+		sr.ticker = nil
 	}
 	
 	// Prevent panics from double-closing the channel
@@ -186,8 +224,8 @@ func (sr *SessionRunner) Stop() {
 		return
 	}
 	
-	if sr.Ticker != nil {
-		sr.Ticker.Stop()
+	if sr.ticker != nil {
+		sr.ticker.Stop()
 	}
 	
 	// Prevent panics from double-closing the channel
@@ -227,7 +265,7 @@ func (sr *SessionRunner) Events() <-chan SessionEvent {
 func (sr *SessionRunner) isTimeUp() bool {
 	sr.Mutex.Lock()
 	defer sr.Mutex.Unlock()
-	
+
 	if sr.Duration > 0 {
 		var elapsed time.Duration
 		for _, seg := range sr.State.Segments {
@@ -246,15 +284,18 @@ func (sr *SessionRunner) isTimeUp() bool {
 
 // TotalElapsed returns the total elapsed time across all segments.
 func (sr *SessionRunner) TotalElapsed() time.Duration {
-	var elapsed time.Duration
+	sr.Mutex.Lock()
+	defer sr.Mutex.Unlock()
+
+	var ongoingDuration time.Duration
 	for _, seg := range sr.State.Segments {
-		if seg.End != nil {
-			elapsed += seg.End.Sub(seg.Start)
-		} else {
-			elapsed += time.Since(seg.Start)
+		if seg.End == nil {
+			ongoingDuration = time.Since(seg.Start)
+			break
 		}
 	}
-	return elapsed
+
+	return sr.previousSegmentsDuration + ongoingDuration
 }
 
 // Remaining returns the time remaining in the session.
@@ -264,11 +305,11 @@ func (sr *SessionRunner) TotalElapsed() time.Duration {
 func (sr *SessionRunner) Remaining() time.Duration {
 	sr.Mutex.Lock()
 	defer sr.Mutex.Unlock()
-	
+
 	if sr.Completed {
 		return 0
 	}
-	
+
 	if sr.Duration > 0 {
 		elapsed := sr.TotalElapsed()
 		if elapsed >= sr.Duration {

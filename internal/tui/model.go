@@ -39,6 +39,9 @@ type model struct {
 	// State file support
 	stateMgr core.StateStore
 	states   []state.TimeBoxState
+
+	// Time when the last tickMsg was handled, for debounce
+	lastTickTime time.Time
 }
 
 // initialModel creates the initial TUI model.
@@ -65,7 +68,7 @@ func initialModel(tasks []TaskItem, markdownFile string, height int, stateMgr co
 		table.WithFocused(false),
 		table.WithHeight(10),
 	)
-	
+
 	m := model{
 		list:        l,
 		height:      height,
