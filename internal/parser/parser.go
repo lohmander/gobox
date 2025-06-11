@@ -23,6 +23,7 @@ func extractTextSkippingNode(n ast.Node, skip ast.Node, content []byte, builder 
 	if n == skip {
 		return
 	}
+
 	if t, ok := n.(*ast.Text); ok {
 		builder.Write(t.Segment.Value(content))
 	} else {
@@ -33,7 +34,7 @@ func extractTextSkippingNode(n ast.Node, skip ast.Node, content []byte, builder 
 }
 
 func ExtractTask(node ast.Node, content []byte) (*task.Task, bool) {
-	re := regexp.MustCompile(`(@(\d+h\d+m|\d+h|\d+m))\s*$`)
+	re := regexp.MustCompile(`(@(?:\d+h\d+m|\d+h|\d+m))(?:\s|$)`)
 
 	if check, ok := node.(*east.TaskCheckBox); ok {
 		listItem := FindParentListItem(check)
