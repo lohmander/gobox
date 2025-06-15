@@ -89,6 +89,45 @@ func TestStartGoBox_BasicFlow(t *testing.T) {
 		close(done)
 	}()
 
+	// Additional test to verify markdown update on task completion works through core.StartGoBoxWithClockAndStore
+	t.Run("Integration test: Complete task updates markdown", func(t *testing.T) {
+		tmpFile := createTempMarkdownFile(t, "- [ ] Integrate Test Task @1m\n")
+		memStore := NewInMemoryStateStore()
+
+		origStdin := os.Stdin
+		r, w, _ := os.Pipe()
+		os.Stdin = r
+
+		done := make(chan struct{})
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			w.Write([]byte("\n"))
+			w.Close()
+			close(done)
+		}()
+
+		err := StartGoBoxWithClockAndStore(tmpFile, nil, memStore)
+		os.Stdin = origStdin
+
+		if err != nil {
+			t.Fatalf("StartGoBoxWithClockAndStore returned error: %v", err)
+		}
+		<-done
+
+		updatedContent, errRead := os.ReadFile(tmpFile)
+		if errRead != nil {
+			t.Fatalf("failed to read updated markdown file: %v", errRead)
+		}
+		updatedStr := string(updatedContent)
+
+		if !strings.Contains(updatedStr, "[x] Integrate Test Task @1m") {
+			t.Errorf("Task was not marked as completed in markdown: %q", updatedStr)
+		}
+		if !strings.Contains(updatedStr, "⏱️") {
+			t.Errorf("Duration annotation missing in markdown: %q", updatedStr)
+		}
+	})
+
 	out, err := captureOutput(func() {
 		StartGoBoxWithClockAndStore(tmpFile, nil, memStore)
 	})

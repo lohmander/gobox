@@ -7,7 +7,6 @@ import (
 	"gobox/internal/gitutil"
 	"gobox/internal/gitwatcher"
 	"gobox/internal/parser"
-	"gobox/internal/rewrite"
 	"gobox/internal/session"
 	"gobox/internal/state"
 
@@ -54,7 +53,7 @@ func watchCommitsCmd(gw *gitwatcher.GitWatcher) tea.Cmd {
 func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		return handleKeyMsg(m, msg)
+		return HandleKeyMsg(m, msg)
 	case tickMsg:
 		return handleTickMsg(m, msg)
 	case sessionCompletedMsg:
@@ -64,7 +63,7 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		return handleWindowResize(m, msg)
 	default:
-		if m.activeView == ViewTaskList {
+		if m.ActiveView == ViewTaskList {
 			var cmd tea.Cmd
 			m.list, cmd = m.list.Update(msg)
 			return m, cmd
@@ -73,10 +72,10 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 	return m, nil
 }
 
-func handleKeyMsg(m model, msg tea.KeyMsg) (model, tea.Cmd) {
+func HandleKeyMsg(m model, msg tea.KeyMsg) (model, tea.Cmd) {
 	k := msg.String()
 
-	switch m.activeView {
+	switch m.ActiveView {
 	case ViewQuitting:
 		// If quitting, ignore further input
 		return m, nil
@@ -84,30 +83,30 @@ func handleKeyMsg(m model, msg tea.KeyMsg) (model, tea.Cmd) {
 	case ViewTimerActive:
 		switch k {
 		case "ctrl+c", "q":
-			m.activeView = ViewQuitting
+			m.ActiveView = ViewQuitting
 			if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
 				runner.Stop()
 			}
-			_ = m.stateMgr.Save(m.states)
+			_ = m.stateMgr.Save(m.States)
 			return m, tea.Quit
 
 		case "enter":
 			if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
 				runner.Complete()
 			}
-			m.activeView = ViewTimerDone
+			m.ActiveView = ViewTimerDone
 			return m, nil
 		}
 
 	case ViewTimerDone:
 		switch k {
 		case "enter", " ":
-			if m.sessionState != nil && m.list.Title != "" {
+			if m.SessionState != nil && m.list.Title != "" {
 				now := time.Now()
 
 				// Calculate total duration
 				var totalDuration time.Duration
-				for _, seg := range m.sessionState.Segments {
+				for _, seg := range m.SessionState.Segments {
 					if seg.End != nil {
 						totalDuration += seg.End.Sub(seg.Start)
 					} else {
@@ -120,7 +119,7 @@ func handleKeyMsg(m model, msg tea.KeyMsg) (model, tea.Cmd) {
 					var allCommits []string
 					commitSet := make(map[string]struct{})
 
-					for _, seg := range m.sessionState.Segments {
+					for _, seg := range m.SessionState.Segments {
 						if seg.End == nil {
 							continue
 						}
@@ -139,24 +138,23 @@ func handleKeyMsg(m model, msg tea.KeyMsg) (model, tea.Cmd) {
 				}()
 
 				// Update the markdown file
-				updatedTask := m.timerTask.task
+				updatedTask := m.TimerTask.Task
 				updatedTask.IsChecked = true
 
 				markdownFile := m.list.Title
 
-				// Use the direct task update method that works with description matching
-				err := rewrite.UpdateTaskWithState(markdownFile, updatedTask, totalDuration, commitsDuringTask)
-				if err != nil {
-					// silently ignore
+				if err := parser.UpdateMarkdown(markdownFile, updatedTask, commitsDuringTask, totalDuration); err != nil {
+					fmt.Printf("Failed to update markdown file %s, quitting\n", markdownFile)
+					return m, tea.Quit
 				}
 
 				// Remove completed task state and save
-				m.states = m.stateMgr.RemoveTaskState(m.states, m.sessionState.TaskHash)
-				_ = m.stateMgr.Save(m.states)
-				m.sessionState = nil
+				m.States = m.stateMgr.RemoveTaskState(m.States, m.SessionState.TaskHash)
+				_ = m.stateMgr.Save(m.States)
+				m.SessionState = nil
 			}
 
-			m.activeView = ViewTaskList
+			m.ActiveView = ViewTaskList
 			return m, nil
 
 		default:
@@ -167,84 +165,84 @@ func handleKeyMsg(m model, msg tea.KeyMsg) (model, tea.Cmd) {
 		switch k {
 		case "ctrl+c", "q":
 			now := time.Now()
-			if m.sessionState != nil {
-				taskHash := m.sessionState.TaskHash
-				for i := range m.states {
-					if m.states[i].TaskHash == taskHash {
-						m.sessionState = &m.states[i]
+			if m.SessionState != nil {
+				taskHash := m.SessionState.TaskHash
+				for i := range m.States {
+					if m.States[i].TaskHash == taskHash {
+						m.SessionState = &m.States[i]
 						break
 					}
 				}
 			}
-			if m.sessionState != nil && len(m.sessionState.Segments) > 0 {
-				lastSeg := &m.sessionState.Segments[len(m.sessionState.Segments)-1]
+			if m.SessionState != nil && len(m.SessionState.Segments) > 0 {
+				lastSeg := &m.SessionState.Segments[len(m.SessionState.Segments)-1]
 				if lastSeg.End == nil {
 					lastSeg.End = &now
 				}
 			}
-			_ = m.stateMgr.Save(m.states)
-			m.activeView = ViewQuitting
+			_ = m.stateMgr.Save(m.States)
+			m.ActiveView = ViewQuitting
 			return m, tea.Quit
 
 		case "enter":
 			if item, ok := m.list.SelectedItem().(TaskItem); ok {
-				duration, endTime, err := parser.ParseTimeBox(item.task.TimeBox)
+				duration, endTime, err := parser.ParseTimeBox(item.Task.TimeBox)
 				if err == nil && (duration > 0 || !endTime.IsZero()) {
 					now := time.Now()
-					taskHash := item.task.Hash()
+					taskHash := item.Task.Hash()
 					found := false
 					var idx int
 
 					// Find existing task state or create new one
-					for i := range m.states {
-						if m.states[i].TaskHash == taskHash {
+					for i := range m.States {
+						if m.States[i].TaskHash == taskHash {
 							idx = i
 							found = true
 							break
 						}
 					}
 					if !found {
-						cleanStates := m.stateMgr.RemoveTaskState(m.states, taskHash)
+						cleanStates := m.stateMgr.RemoveTaskState(m.States, taskHash)
 						newState := state.TimeBoxState{
 							TaskHash: taskHash,
 							Segments: []state.TimeSegment{{Start: now}},
 						}
-						m.states = append(cleanStates, newState)
-						idx = len(m.states) - 1
-						_ = m.stateMgr.Save(m.states)
+						m.States = append(cleanStates, newState)
+						idx = len(m.States) - 1
+						_ = m.stateMgr.Save(m.States)
 					} else {
 						segment := state.TimeSegment{Start: now}
-						m.states[idx].Segments = append(m.states[idx].Segments, segment)
+						m.States[idx].Segments = append(m.States[idx].Segments, segment)
 					}
 
-					m.sessionState = &m.states[idx]
+					m.SessionState = &m.States[idx]
 
 					// Set up timer state
-					m.timerTask = item
-					m.activeView = ViewTimerActive
+					m.TimerTask = item
+					m.ActiveView = ViewTimerActive
 
-					runner := session.NewSessionRunner(item.task, m.sessionState, duration, endTime)
+					runner := session.NewSessionRunner(item.Task, m.SessionState, duration, endTime)
 					m.sessionRunner = runner
 					m.timerTotal = duration
 					m.timer = duration
-					m.timerTask = item
+					m.TimerTask = item
 
 					runner.Start()
 
 					// Setup git watcher if needed
 					if m.gitWatcher == nil {
 						var startTime time.Time
-						if len(m.sessionState.Segments) > 0 {
-							startTime = m.sessionState.Segments[0].Start
+						if len(m.SessionState.Segments) > 0 {
+							startTime = m.SessionState.Segments[0].Start
 						} else {
 							startTime = now
 						}
 						watcher := gitwatcher.NewGitWatcher(startTime, 5*time.Second)
 						m.gitWatcher = watcher
 
-						if len(m.sessionState.Segments) > 1 {
+						if len(m.SessionState.Segments) > 1 {
 							commitSet := make(map[string]struct{})
-							for _, seg := range m.sessionState.Segments {
+							for _, seg := range m.SessionState.Segments {
 								if seg.End == nil {
 									continue
 								}
@@ -304,7 +302,7 @@ func handleKeyMsg(m model, msg tea.KeyMsg) (model, tea.Cmd) {
 
 func handleTickMsg(m model, _ tickMsg) (model, tea.Cmd) {
 	if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
-		if m.activeView != ViewTimerDone {
+		if m.ActiveView != ViewTimerDone {
 			if m.timerTotal > 0 {
 				elapsed := runner.TotalElapsed()
 				m.timer = m.timerTotal - elapsed
@@ -326,19 +324,19 @@ func handleTickMsg(m model, _ tickMsg) (model, tea.Cmd) {
 }
 
 func handleSessionCompletedMsg(m model, _ sessionCompletedMsg) (model, tea.Cmd) {
-	m.activeView = ViewTimerDone
+	m.ActiveView = ViewTimerDone
 
-	if m.sessionState != nil {
+	if m.SessionState != nil {
 		now := time.Now()
 
 		// Close last segment if open
-		if len(m.sessionState.Segments) > 0 && m.sessionState.Segments[len(m.sessionState.Segments)-1].End == nil {
-			m.sessionState.Segments[len(m.sessionState.Segments)-1].End = &now
+		if len(m.SessionState.Segments) > 0 && m.SessionState.Segments[len(m.SessionState.Segments)-1].End == nil {
+			m.SessionState.Segments[len(m.SessionState.Segments)-1].End = &now
 		}
 
 		// Calculate total duration
 		var totalDuration time.Duration
-		for _, seg := range m.sessionState.Segments {
+		for _, seg := range m.SessionState.Segments {
 			if seg.End != nil {
 				totalDuration += seg.End.Sub(seg.Start)
 			} else {
@@ -351,7 +349,7 @@ func handleSessionCompletedMsg(m model, _ sessionCompletedMsg) (model, tea.Cmd) 
 			var allCommits []string
 			commitSet := make(map[string]struct{})
 
-			for _, seg := range m.sessionState.Segments {
+			for _, seg := range m.SessionState.Segments {
 				if seg.End == nil {
 					continue
 				}
@@ -369,7 +367,7 @@ func handleSessionCompletedMsg(m model, _ sessionCompletedMsg) (model, tea.Cmd) 
 			return allCommits, nil
 		}()
 
-		_ = m.stateMgr.Save(m.states)
+		_ = m.stateMgr.Save(m.States)
 	}
 	return m, nil
 }
@@ -406,7 +404,7 @@ func handleWindowResize(m model, msg tea.WindowSizeMsg) (model, tea.Cmd) {
 
 	// Refresh list items with updated width for dynamic wrapping
 	items := make([]list.Item, len(m.list.Items()))
-	for i := 0; i < len(m.list.Items()); i++ {
+	for i := range m.list.Items() {
 		if taskItem, ok := m.list.Items()[i].(TaskItem); ok {
 			ti := taskItem
 			ti.SetWidth(m.width - 4) // Subtract any padding

@@ -9,7 +9,7 @@ import (
 
 // ModelView renders the TUI model's view as a string.
 func ModelView(m model) string {
-	switch m.activeView {
+	switch m.ActiveView {
 	case ViewQuitting:
 		return quittingView()
 	case ViewTimerActive:
@@ -48,7 +48,7 @@ func timerView(m model) string {
 	timerBlock := lipgloss.NewStyle().Padding(1).BorderStyle(lipgloss.RoundedBorder()).Render(
 		fmt.Sprintf(
 			"%s\n%s\n\nPress Enter to complete early or q/Ctrl+C to quit.",
-			headerStyle.Render("Working on: ")+m.timerTask.Title(),
+			headerStyle.Render("Working on: ")+m.TimerTask.Title(),
 			headerStyle.Render("Time remaining: ")+timerStyle.Render(timeStr),
 		),
 	)

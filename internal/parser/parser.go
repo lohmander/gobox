@@ -26,10 +26,17 @@ func extractTextSkippingNode(n ast.Node, skip ast.Node, content []byte, builder 
 
 	if t, ok := n.(*ast.Text); ok {
 		builder.Write(t.Segment.Value(content))
-	} else {
-		for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-			extractTextSkippingNode(c, skip, content, builder)
+		return
+	}
+
+	if t, ok := n.(*ast.Paragraph); ok {
+		for range t.Lines().Len() {
+			builder.Write([]byte("\n"))
 		}
+	}
+
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		extractTextSkippingNode(c, skip, content, builder)
 	}
 }
 
@@ -50,7 +57,6 @@ func ExtractTask(node ast.Node, content []byte) (*task.Task, bool) {
 		}
 
 		descText := strings.TrimSpace(descBuilder.String())
-
 		matches := re.FindSubmatch([]byte(descText))
 		timeBox := ""
 
@@ -65,6 +71,7 @@ func ExtractTask(node ast.Node, content []byte) (*task.Task, bool) {
 			Description: itemText,
 			TimeBox:     timeBox,
 			IsChecked:   check.IsChecked,
+			Position:    task.Position{},
 		}, true
 	}
 
@@ -215,8 +222,17 @@ func UpdateMarkdown(
 					hours := int(totalDuration.Hours())
 					minutes := int(totalDuration.Minutes()) % 60
 					seconds := int(totalDuration.Seconds()) % 60
-					durationStr := fmt.Sprintf("\n⏱️ %dh %dm %ds", hours, minutes, seconds)
+					durationStr := fmt.Sprintf("  * ⏱️ %dh %dm %ds", hours, minutes, seconds)
 					taskText = append(taskText, []byte(durationStr))
+				}
+
+				if len(commits) > 0 {
+					taskText = append(taskText, []byte("  * 📝 Commits:"))
+
+					for _, commit := range commits {
+						commitText := fmt.Sprintf("    - `%s`", commit)
+						taskText = append(taskText, []byte(commitText))
+					}
 				}
 
 				rewriter.CopyLinesUntil(startIndex)

@@ -16,28 +16,28 @@ import (
 
 // TaskItem represents a task for the list.
 type TaskItem struct {
-	rawLine string // raw unwrapped line: description + timebox
-	task    task.Task
-	width   int // current width to wrap at
+	RawLine string // raw unwrapped line: description + timebox
+	Task    task.Task
+	Width   int // current width to wrap at
 }
 
 func (t *TaskItem) SetWidth(w int) {
-	t.width = w
+	t.Width = w
 }
 
 func (t TaskItem) Title() string {
-	if t.width > 0 {
-		return wrapText(t.rawLine, t.width)
+	if t.Width > 0 {
+		return wrapText(t.RawLine, t.Width)
 	}
-	return t.rawLine
+	return t.RawLine
 }
 
 func (t TaskItem) Description() string { return "" }
 func (t TaskItem) FilterValue() string {
-	if t.width > 0 {
-		return wrapText(t.rawLine, t.width)
+	if t.Width > 0 {
+		return wrapText(t.RawLine, t.Width)
 	}
-	return t.rawLine
+	return t.RawLine
 }
 
 // ViewState determines which view is active in the TUI.
@@ -95,12 +95,12 @@ func (d *multilineDelegate) Render(w io.Writer, m list.Model, index int, item li
 
 type model struct {
 	list          list.Model
-	activeView    ViewState
+	ActiveView    ViewState
 	timer         time.Duration
 	timerTotal    time.Duration
-	timerTask     TaskItem
+	TimerTask     TaskItem
 	sessionRunner interface{} // session.SessionRunner, but avoid import cycle
-	sessionState  *state.TimeBoxState
+	SessionState  *state.TimeBoxState
 	gitWatcher    interface{} // gitwatcher.GitWatcher, but avoid import cycle
 	commits       []string
 	commitTable   table.Model
@@ -109,14 +109,14 @@ type model struct {
 
 	// State file support
 	stateMgr core.StateStore
-	states   []state.TimeBoxState
+	States   []state.TimeBoxState
 
 	// Time when the last tickMsg was handled, for debounce
 	lastTickTime time.Time
 }
 
-// initialModel creates the initial TUI model.
-func initialModel(tasks []TaskItem, markdownFile string, height int, stateMgr core.StateStore, states []state.TimeBoxState) model {
+// InitialModel creates the initial TUI model.
+func InitialModel(tasks []TaskItem, markdownFile string, height int, stateMgr core.StateStore, states []state.TimeBoxState) model {
 	items := make([]list.Item, len(tasks))
 	for i, t := range tasks {
 		ti := t
@@ -152,10 +152,10 @@ func initialModel(tasks []TaskItem, markdownFile string, height int, stateMgr co
 		height:      height,
 		width:       defaultWidth,
 		stateMgr:    stateMgr,
-		states:      states,
+		States:      states,
 		commitTable: t,
 		commits:     []string{},
-		activeView:  ViewTaskList,
+		ActiveView:  ViewTaskList,
 	}
 	return m
 }

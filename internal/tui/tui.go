@@ -82,10 +82,10 @@ func Run(markdownFile string, stateMgr core.StateStore, states []state.TimeBoxSt
 
 		line := fmt.Sprintf("%s %s", t.Description, t.TimeBox)
 
-		tasks = append(tasks, TaskItem{rawLine: line, task: t})
+		tasks = append(tasks, TaskItem{RawLine: line, Task: t})
 	}
 
-	m := initialModel(tasks, markdownFile, 24, stateMgr, states)
+	m := InitialModel(tasks, markdownFile, 24, stateMgr, states)
 	p := tea.NewProgram(&teaModelAdapter{m})
 
 	_, err = p.Run()
