@@ -13,6 +13,7 @@ import (
 
 	"slices"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -402,5 +403,19 @@ func handleWindowResize(m model, msg tea.WindowSizeMsg) (model, tea.Cmd) {
 	m.list.SetWidth(msg.Width)
 	m.commitTable.SetHeight(10)
 	m.commitTable.SetWidth(msg.Width)
+
+	// Refresh list items with updated width for dynamic wrapping
+	items := make([]list.Item, len(m.list.Items()))
+	for i := 0; i < len(m.list.Items()); i++ {
+		if taskItem, ok := m.list.Items()[i].(TaskItem); ok {
+			ti := taskItem
+			ti.SetWidth(m.width - 4) // Subtract any padding
+			items[i] = ti
+		} else {
+			items[i] = m.list.Items()[i]
+		}
+	}
+	m.list.SetItems(items)
+
 	return m, nil
 }

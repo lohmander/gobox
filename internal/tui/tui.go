@@ -2,11 +2,65 @@ package tui
 
 import (
 	"fmt"
+	"strings"
+
 	"gobox/internal/core"
 	"gobox/internal/parser"
 	"gobox/internal/state"
+
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 )
+
+// wrapText wraps input text to lines no longer than maxWidth display cells.
+// It wraps on word boundaries to avoid breaking words when possible.
+func wrapText(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return s
+	}
+
+	var lines []string
+	for _, paragraph := range strings.Split(s, "\n") {
+		words := strings.Fields(paragraph)
+		if len(words) == 0 {
+			// Empty paragraph, add empty line
+			lines = append(lines, "")
+			continue
+		}
+
+		var lineBuilder strings.Builder
+		lineWidth := 0
+		spaceWidth := runewidth.StringWidth(" ")
+		for i, word := range words {
+			wordWidth := runewidth.StringWidth(word)
+			// Calculate if adding the word would exceed maxWidth
+			// Add a space before word if not first word in line
+			addedWidth := wordWidth
+			if lineWidth > 0 {
+				addedWidth += spaceWidth
+			}
+			if lineWidth+addedWidth > maxWidth {
+				// start new line
+				lines = append(lines, lineBuilder.String())
+				lineBuilder.Reset()
+				lineBuilder.WriteString(word)
+				lineWidth = wordWidth
+			} else {
+				if lineWidth > 0 {
+					lineBuilder.WriteString(" ")
+					lineWidth += spaceWidth
+				}
+				lineBuilder.WriteString(word)
+				lineWidth += wordWidth
+			}
+			// If last word, append line
+			if i == len(words)-1 {
+				lines = append(lines, lineBuilder.String())
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
 
 // Init initializes the TUI model and returns any initial commands to run.
 func (m model) Init() tea.Cmd {
@@ -25,8 +79,10 @@ func Run(markdownFile string, stateMgr core.StateStore, states []state.TimeBoxSt
 		if t.IsChecked {
 			continue
 		}
+
 		line := fmt.Sprintf("%s %s", t.Description, t.TimeBox)
-		tasks = append(tasks, TaskItem{line: line, task: t})
+
+		tasks = append(tasks, TaskItem{rawLine: line, task: t})
 	}
 
 	m := initialModel(tasks, markdownFile, 24, stateMgr, states)
