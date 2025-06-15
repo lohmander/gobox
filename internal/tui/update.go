@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"gobox/internal/gitutil"
@@ -14,7 +13,6 @@ import (
 
 	"slices"
 
-	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -53,410 +51,356 @@ func watchCommitsCmd(gw *gitwatcher.GitWatcher) tea.Cmd {
 
 // Update handles all Bubbletea update logic for the TUI model.
 func Update(m model, msg tea.Msg) (model, tea.Cmd) {
-	// Always handle quit first to ensure TUI can exit
-	if msg, ok := msg.(tea.KeyMsg); ok {
-		k := msg.String()
-		if k == "ctrl+c" || k == "q" {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		return handleKeyMsg(m, msg)
+	case tickMsg:
+		return handleTickMsg(m, msg)
+	case sessionCompletedMsg:
+		return handleSessionCompletedMsg(m, msg)
+	case commitMsg:
+		return handleCommitMsg(m, msg)
+	case tea.WindowSizeMsg:
+		return handleWindowResize(m, msg)
+	default:
+		if m.activeView == ViewTaskList {
+			var cmd tea.Cmd
+			m.list, cmd = m.list.Update(msg)
+			return m, cmd
+		}
+	}
+	return m, nil
+}
+
+func handleKeyMsg(m model, msg tea.KeyMsg) (model, tea.Cmd) {
+	k := msg.String()
+
+	switch m.activeView {
+	case ViewQuitting:
+		// If quitting, ignore further input
+		return m, nil
+
+	case ViewTimerActive:
+		switch k {
+		case "ctrl+c", "q":
 			m.activeView = ViewQuitting
-			// Only attempt to stop the session runner if we're in an active timer
-			if m.activeView == ViewTimerActive {
-				if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
-					runner.Stop()
-				}
+			if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
+				runner.Stop()
 			}
 			_ = m.stateMgr.Save(m.states)
 			return m, tea.Quit
-		}
 
-		if k == "enter" && m.activeView == ViewTimerActive {
-			// Complete timer early when enter is pressed during active timer
+		case "enter":
 			if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
 				runner.Complete()
-				m.activeView = ViewTimerDone
-				return m, nil
 			}
-		}
-	}
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.height = msg.Height
-		m.width = msg.Width
-		listHeight := max(msg.Height-12, 5)
-		m.list.SetHeight(listHeight)
-		m.list.SetWidth(msg.Width)
-		m.commitTable.SetHeight(10)
-		m.commitTable.SetWidth(msg.Width)
-		return m, nil
-
-	case tickMsg:
-		// Update timer display
-		if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
-			if m.activeView != ViewTimerDone {
-				// For duration-based timers, count down
-				if m.timerTotal > 0 {
-					elapsed := runner.TotalElapsed()
-					m.timer = m.timerTotal - elapsed
-					if m.timer < 0 {
-						m.timer = 0
-					}
-				} else {
-					// For end-time based timers
-					m.timer = runner.Remaining()
-					if m.timer < 0 {
-						m.timer = 0
-					}
-				}
-			}
-		}
-		return m, tea.Tick(time.Second, func(t time.Time) tea.Msg {
-			return tickMsg{}
-		})
-
-	case sessionCompletedMsg:
-		m.activeView = ViewTimerDone
-
-		// Save state when timer is completed
-		if m.sessionState != nil {
-			now := time.Now()
-
-			// Ensure the last segment is closed
-			if len(m.sessionState.Segments) > 0 && m.sessionState.Segments[len(m.sessionState.Segments)-1].End == nil {
-				m.sessionState.Segments[len(m.sessionState.Segments)-1].End = &now
-			}
-
-			// Calculate the total duration spent on this task
-			var totalDuration time.Duration
-			for _, seg := range m.sessionState.Segments {
-				if seg.End != nil {
-					totalDuration += seg.End.Sub(seg.Start)
-				} else {
-					totalDuration += now.Sub(seg.Start)
-				}
-			}
-
-			// Get all commits in completed segments
-			if _, err := func() ([]string, error) {
-				var allCommits []string
-				commitSet := make(map[string]struct{})
-
-				for _, seg := range m.sessionState.Segments {
-					if seg.End == nil {
-						continue
-					}
-					commits, err := gitutil.GetCommitsBetweenTimeRange(seg.Start, *seg.End)
-					if err != nil {
-						return nil, err
-					}
-					for _, c := range commits {
-						if _, exists := commitSet[c]; !exists {
-							commitSet[c] = struct{}{}
-							allCommits = append(allCommits, c)
-						}
-					}
-				}
-				return allCommits, nil
-			}(); err != nil {
-				// Handle git error silently - not all users have git repositories
-			}
-
-			// Don't update markdown file here - wait for user confirmation
-			_ = m.stateMgr.Save(m.states)
-		}
-		return m, nil
-
-	case commitMsg:
-		// Add the commit message to our list if it's not a duplicate
-		newCommit := string(msg)
-		isDuplicate := slices.Contains(m.commits, newCommit)
-
-		if !isDuplicate {
-			m.commits = append(m.commits, newCommit)
-			// Update the table rows
-			rows := make([]table.Row, len(m.commits))
-			for i, c := range m.commits {
-				rows[i] = table.Row{c}
-			}
-			// Only update the table if we have at least one column
-			if len(m.commitTable.Columns()) > 0 {
-				m.commitTable.SetRows(rows)
-			}
-		}
-
-		if watcher, ok := m.gitWatcher.(*gitwatcher.GitWatcher); ok && watcher != nil {
-			return m, watchCommitsCmd(watcher)
-		}
-		return m, nil
-
-	case tea.KeyMsg:
-		if m.activeView == ViewTimerActive {
-			switch msg.String() {
-			case "ctrl+c", "q":
-				m.activeView = ViewQuitting
-				if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
-					// Safe stop that won't panic if channels are closed
-					if m.activeView == ViewTimerActive {
-						runner.Stop()
-					}
-				}
-				_ = m.stateMgr.Save(m.states)
-				return m, tea.Quit
-			case "enter":
-				// Complete timer early
-				if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
-					runner.Complete()
-				}
-				return m, nil
-			}
-		} else if m.activeView == ViewTimerDone {
-			// Task is already completed in sessionCompletedMsg handler
-			// Here we just handle returning to the task list
-
-			// Let the user see the completion message before proceeding
-			switch msg.String() {
-			case "enter", " ":
-				// User confirmed completion - now update the markdown file
-				if m.sessionState != nil && m.list.Title != "" {
-					now := time.Now()
-
-					// Calculate total duration
-					var totalDuration time.Duration
-					for _, seg := range m.sessionState.Segments {
-						if seg.End != nil {
-							totalDuration += seg.End.Sub(seg.Start)
-						} else {
-							totalDuration += now.Sub(seg.Start)
-						}
-					}
-
-					// Get commits for the task duration
-
-					commitsDuringTask, _ := func() ([]string, error) {
-						var allCommits []string
-						commitSet := make(map[string]struct{})
-
-						for _, seg := range m.sessionState.Segments {
-							if seg.End == nil {
-								continue
-							}
-							commits, err := gitutil.GetCommitsBetweenTimeRange(seg.Start, *seg.End)
-							if err != nil {
-								return nil, err
-							}
-							for _, c := range commits {
-								if _, exists := commitSet[c]; !exists {
-									commitSet[c] = struct{}{}
-									allCommits = append(allCommits, c)
-								}
-							}
-						}
-						return allCommits, nil
-					}()
-
-					// Update the markdown file
-					updatedTask := m.timerTask.task
-					updatedTask.IsChecked = true
-
-					markdownFile := m.list.Title
-
-					// Use the direct task update method that works with description matching
-					updateErr := rewrite.UpdateTaskWithState(markdownFile, updatedTask, totalDuration, commitsDuringTask)
-					if updateErr != nil {
-						// Handle error silently - logging removed
-					}
-
-					// When returning to list, remove the task from states
-					m.states = m.stateMgr.RemoveTaskState(m.states, m.sessionState.TaskHash)
-					_ = m.stateMgr.Save(m.states)
-					m.sessionState = nil
-				}
-
-				m.activeView = ViewTaskList
-			default:
-				return m, nil
-			}
-			// Reload tasks from markdown file
-			if m.list.Title != "" {
-				parsedTasks, err := parser.ParseMarkdownFile(m.list.Title)
-				if err == nil {
-					tasks := make([]TaskItem, 0, len(parsedTasks))
-					for _, t := range parsedTasks {
-						if t.IsChecked {
-							continue // Skip checked tasks in the TUI
-						}
-						line := fmt.Sprintf("%s %s", strings.TrimSpace(t.Description), strings.TrimSpace(t.TimeBox))
-						tasks = append(tasks, TaskItem{line: line, task: t})
-					}
-					items := make([]list.Item, len(tasks))
-					for i, t := range tasks {
-						items[i] = t
-					}
-					m.list.SetItems(items)
-				}
-			}
+			m.activeView = ViewTimerDone
 			return m, nil
-		} else {
-			switch msg.String() {
-			case "ctrl+c", "q":
+		}
+
+	case ViewTimerDone:
+		switch k {
+		case "enter", " ":
+			if m.sessionState != nil && m.list.Title != "" {
 				now := time.Now()
-				if m.sessionState != nil {
-					taskHash := m.sessionState.TaskHash
+
+				// Calculate total duration
+				var totalDuration time.Duration
+				for _, seg := range m.sessionState.Segments {
+					if seg.End != nil {
+						totalDuration += seg.End.Sub(seg.Start)
+					} else {
+						totalDuration += now.Sub(seg.Start)
+					}
+				}
+
+				// Get commits for the task duration
+				commitsDuringTask, _ := func() ([]string, error) {
+					var allCommits []string
+					commitSet := make(map[string]struct{})
+
+					for _, seg := range m.sessionState.Segments {
+						if seg.End == nil {
+							continue
+						}
+						commits, err := gitutil.GetCommitsBetweenTimeRange(seg.Start, *seg.End)
+						if err != nil {
+							return nil, err
+						}
+						for _, c := range commits {
+							if _, exists := commitSet[c]; !exists {
+								commitSet[c] = struct{}{}
+								allCommits = append(allCommits, c)
+							}
+						}
+					}
+					return allCommits, nil
+				}()
+
+				// Update the markdown file
+				updatedTask := m.timerTask.task
+				updatedTask.IsChecked = true
+
+				markdownFile := m.list.Title
+
+				// Use the direct task update method that works with description matching
+				err := rewrite.UpdateTaskWithState(markdownFile, updatedTask, totalDuration, commitsDuringTask)
+				if err != nil {
+					// silently ignore
+				}
+
+				// Remove completed task state and save
+				m.states = m.stateMgr.RemoveTaskState(m.states, m.sessionState.TaskHash)
+				_ = m.stateMgr.Save(m.states)
+				m.sessionState = nil
+			}
+
+			m.activeView = ViewTaskList
+			return m, nil
+
+		default:
+			return m, nil
+		}
+
+	case ViewTaskList:
+		switch k {
+		case "ctrl+c", "q":
+			now := time.Now()
+			if m.sessionState != nil {
+				taskHash := m.sessionState.TaskHash
+				for i := range m.states {
+					if m.states[i].TaskHash == taskHash {
+						m.sessionState = &m.states[i]
+						break
+					}
+				}
+			}
+			if m.sessionState != nil && len(m.sessionState.Segments) > 0 {
+				lastSeg := &m.sessionState.Segments[len(m.sessionState.Segments)-1]
+				if lastSeg.End == nil {
+					lastSeg.End = &now
+				}
+			}
+			_ = m.stateMgr.Save(m.states)
+			m.activeView = ViewQuitting
+			return m, tea.Quit
+
+		case "enter":
+			if item, ok := m.list.SelectedItem().(TaskItem); ok {
+				duration, endTime, err := parser.ParseTimeBox(item.task.TimeBox)
+				if err == nil && (duration > 0 || !endTime.IsZero()) {
+					now := time.Now()
+					taskHash := item.task.Hash()
+					found := false
+					var idx int
+
+					// Find existing task state or create new one
 					for i := range m.states {
 						if m.states[i].TaskHash == taskHash {
-							m.sessionState = &m.states[i]
+							idx = i
+							found = true
 							break
 						}
 					}
-				}
-				if m.sessionState != nil && len(m.sessionState.Segments) > 0 {
-					lastSeg := &m.sessionState.Segments[len(m.sessionState.Segments)-1]
-					if lastSeg.End == nil {
-						lastSeg.End = &now
-					}
-				}
-				_ = m.stateMgr.Save(m.states)
-				m.activeView = ViewQuitting
-				return m, tea.Quit
-
-			case "enter":
-				// Start timer for selected task using SessionRunner
-				if item, ok := m.list.SelectedItem().(TaskItem); ok {
-					duration, endTime, err := parser.ParseTimeBox(item.task.TimeBox)
-					if err == nil && (duration > 0 || !endTime.IsZero()) {
-						now := time.Now()
-						taskHash := item.task.Hash()
-						found := false
-						var idx int
-
-						// Find existing task state or create a new one
-						for i := range m.states {
-							if m.states[i].TaskHash == taskHash {
-								idx = i
-								found = true
-								break
-							}
+					if !found {
+						cleanStates := m.stateMgr.RemoveTaskState(m.states, taskHash)
+						newState := state.TimeBoxState{
+							TaskHash: taskHash,
+							Segments: []state.TimeSegment{{Start: now}},
 						}
+						m.states = append(cleanStates, newState)
+						idx = len(m.states) - 1
+						_ = m.stateMgr.Save(m.states)
+					} else {
+						segment := state.TimeSegment{Start: now}
+						m.states[idx].Segments = append(m.states[idx].Segments, segment)
+					}
 
-						if !found {
-							// Get a clean state by removing any existing task state with the same hash
-							cleanStates := m.stateMgr.RemoveTaskState(m.states, taskHash)
+					m.sessionState = &m.states[idx]
 
-							// Create a new state for this task
-							newState := state.TimeBoxState{
-								TaskHash: taskHash,
-								Segments: []state.TimeSegment{{Start: now}},
-							}
+					// Set up timer state
+					m.timerTask = item
+					m.activeView = ViewTimerActive
 
-							// Add the new state
-							m.states = append(cleanStates, newState)
-							idx = len(m.states) - 1
+					runner := session.NewSessionRunner(item.task, m.sessionState, duration, endTime)
+					m.sessionRunner = runner
+					m.timerTotal = duration
+					m.timer = duration
+					m.timerTask = item
 
-							// Save state to disk
-							_ = m.stateMgr.Save(m.states)
+					runner.Start()
+
+					// Setup git watcher if needed
+					if m.gitWatcher == nil {
+						var startTime time.Time
+						if len(m.sessionState.Segments) > 0 {
+							startTime = m.sessionState.Segments[0].Start
 						} else {
-							// Add a new segment to the existing task state
-							segment := state.TimeSegment{Start: now}
-							m.states[idx].Segments = append(m.states[idx].Segments, segment)
+							startTime = now
 						}
+						watcher := gitwatcher.NewGitWatcher(startTime, 5*time.Second)
+						m.gitWatcher = watcher
 
-						// Set current session state
-						m.sessionState = &m.states[idx]
-
-						// Set up timer
-						m.timerTask = item
-						m.activeView = ViewTimerActive
-
-						// Initialize session runner
-						runner := session.NewSessionRunner(item.task, m.sessionState, duration, endTime)
-						m.sessionRunner = runner
-						m.timerTotal = duration
-						m.timer = duration
-						m.timerTask = item
-
-						// Start the runner
-						runner.Start()
-
-						// Initialize git watcher if not already set up
-						if m.gitWatcher == nil {
-							// For tasks with previous segments, get all commits since first segment
-							var startTime time.Time
-							if len(m.sessionState.Segments) > 0 {
-								// Use the start time of the first segment
-								startTime = m.sessionState.Segments[0].Start
-							} else {
-								// Use current time for new tasks
-								startTime = now
-							}
-
-							watcher := gitwatcher.NewGitWatcher(startTime, 5*time.Second)
-							m.gitWatcher = watcher
-
-							// Get any previous commits that happened between completed segments
-							if len(m.sessionState.Segments) > 1 {
-								commitSet := make(map[string]struct{})
-								for _, seg := range m.sessionState.Segments {
-									if seg.End == nil {
-										continue
-									}
-									commits, err := gitutil.GetCommitsBetweenTimeRange(seg.Start, *seg.End)
-									if err != nil {
-										continue
-									}
-									for _, commit := range commits {
-										if _, exists := commitSet[commit]; !exists {
-											commitSet[commit] = struct{}{}
-											m.commits = append(m.commits, commit)
-										}
-									}
+						if len(m.sessionState.Segments) > 1 {
+							commitSet := make(map[string]struct{})
+							for _, seg := range m.sessionState.Segments {
+								if seg.End == nil {
+									continue
 								}
-
-								// Update the table with initial commits
-								if len(m.commits) > 0 {
-									rows := make([]table.Row, len(m.commits))
-									for i, c := range m.commits {
-										rows[i] = table.Row{c}
-									}
-									if len(m.commitTable.Columns()) > 0 {
-										m.commitTable.SetRows(rows)
+								commits, err := gitutil.GetCommitsBetweenTimeRange(seg.Start, *seg.End)
+								if err != nil {
+									continue
+								}
+								for _, commit := range commits {
+									if _, exists := commitSet[commit]; !exists {
+										commitSet[commit] = struct{}{}
+										m.commits = append(m.commits, commit)
 									}
 								}
 							}
-
-							watcher.Start()
-
-							// Make sure the commit table is initialized with proper columns
-							if len(m.commitTable.Columns()) == 0 {
-								columns := []table.Column{
-									{Title: "Commit", Width: m.width - 4},
+							if len(m.commits) > 0 {
+								rows := make([]table.Row, len(m.commits))
+								for i, c := range m.commits {
+									rows[i] = table.Row{c}
 								}
-								m.commitTable = table.New(
-									table.WithColumns(columns),
-									table.WithRows([]table.Row{}),
-									table.WithFocused(false),
-									table.WithHeight(10),
-								)
+								if len(m.commitTable.Columns()) > 0 {
+									m.commitTable.SetRows(rows)
+								}
 							}
 						}
 
-						// Return commands for handling session tick events and git commits
-						var cmds []tea.Cmd
-						cmds = append(cmds, sessionTickCmd(runner))
-						if watcher, ok := m.gitWatcher.(*gitwatcher.GitWatcher); ok && watcher != nil {
-							cmds = append(cmds, watchCommitsCmd(watcher))
-						}
+						watcher.Start()
 
-						return m, tea.Batch(cmds...)
+						if len(m.commitTable.Columns()) == 0 {
+							columns := []table.Column{
+								{Title: "Commit", Width: m.width - 4},
+							}
+							m.commitTable = table.New(
+								table.WithColumns(columns),
+								table.WithRows([]table.Row{}),
+								table.WithFocused(false),
+								table.WithHeight(10),
+							)
+						}
 					}
+
+					cmds := []tea.Cmd{sessionTickCmd(runner)}
+					if watcher, ok := m.gitWatcher.(*gitwatcher.GitWatcher); ok && watcher != nil {
+						cmds = append(cmds, watchCommitsCmd(watcher))
+					}
+					return m, tea.Batch(cmds...)
+				}
+			}
+		default:
+			// Forward other keys to the list's update for navigation, selection, etc.
+			var cmd tea.Cmd
+			m.list, cmd = m.list.Update(msg)
+			return m, cmd
+		}
+	}
+	return m, nil
+}
+
+func handleTickMsg(m model, _ tickMsg) (model, tea.Cmd) {
+	if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
+		if m.activeView != ViewTimerDone {
+			if m.timerTotal > 0 {
+				elapsed := runner.TotalElapsed()
+				m.timer = m.timerTotal - elapsed
+				if m.timer < 0 {
+					m.timer = 0
+				}
+			} else {
+				m.timer = runner.Remaining()
+				if m.timer < 0 {
+					m.timer = 0
 				}
 			}
 		}
 	}
 
-	// Forward key events to the list when not in timer mode
-	if m.activeView == ViewTaskList {
-		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(msg)
-		return m, cmd
+	return m, tea.Tick(time.Second, func(time.Time) tea.Msg {
+		return tickMsg{}
+	})
+}
+
+func handleSessionCompletedMsg(m model, _ sessionCompletedMsg) (model, tea.Cmd) {
+	m.activeView = ViewTimerDone
+
+	if m.sessionState != nil {
+		now := time.Now()
+
+		// Close last segment if open
+		if len(m.sessionState.Segments) > 0 && m.sessionState.Segments[len(m.sessionState.Segments)-1].End == nil {
+			m.sessionState.Segments[len(m.sessionState.Segments)-1].End = &now
+		}
+
+		// Calculate total duration
+		var totalDuration time.Duration
+		for _, seg := range m.sessionState.Segments {
+			if seg.End != nil {
+				totalDuration += seg.End.Sub(seg.Start)
+			} else {
+				totalDuration += now.Sub(seg.Start)
+			}
+		}
+
+		// Attempt to get commits, ignore errors
+		_, _ = func() ([]string, error) {
+			var allCommits []string
+			commitSet := make(map[string]struct{})
+
+			for _, seg := range m.sessionState.Segments {
+				if seg.End == nil {
+					continue
+				}
+				commits, err := gitutil.GetCommitsBetweenTimeRange(seg.Start, *seg.End)
+				if err != nil {
+					return nil, err
+				}
+				for _, c := range commits {
+					if _, exists := commitSet[c]; !exists {
+						commitSet[c] = struct{}{}
+						allCommits = append(allCommits, c)
+					}
+				}
+			}
+			return allCommits, nil
+		}()
+
+		_ = m.stateMgr.Save(m.states)
+	}
+	return m, nil
+}
+
+func handleCommitMsg(m model, msg commitMsg) (model, tea.Cmd) {
+	newCommit := string(msg)
+	isDuplicate := slices.Contains(m.commits, newCommit)
+
+	if !isDuplicate {
+		m.commits = append(m.commits, newCommit)
+		rows := make([]table.Row, len(m.commits))
+		for i, c := range m.commits {
+			rows[i] = table.Row{c}
+		}
+		if len(m.commitTable.Columns()) > 0 {
+			m.commitTable.SetRows(rows)
+		}
 	}
 
+	if watcher, ok := m.gitWatcher.(*gitwatcher.GitWatcher); ok && watcher != nil {
+		return m, watchCommitsCmd(watcher)
+	}
+	return m, nil
+}
+
+func handleWindowResize(m model, msg tea.WindowSizeMsg) (model, tea.Cmd) {
+	m.height = msg.Height
+	m.width = msg.Width
+	listHeight := max(msg.Height-12, 5)
+	m.list.SetHeight(listHeight)
+	m.list.SetWidth(msg.Width)
+	m.commitTable.SetHeight(10)
+	m.commitTable.SetWidth(msg.Width)
 	return m, nil
 }
