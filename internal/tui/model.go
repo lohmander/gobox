@@ -4,9 +4,10 @@ import (
 	"gobox/internal/core"
 	"gobox/internal/state"
 	"gobox/pkg/task"
+	"time"
+
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/table"
-	"time"
 )
 
 // TaskItem represents a task for the list.
@@ -19,15 +20,23 @@ func (t TaskItem) Title() string       { return t.line }
 func (t TaskItem) Description() string { return "" }
 func (t TaskItem) FilterValue() string { return t.line }
 
+// ViewState determines which view is active in the TUI.
+type ViewState int
+
+const (
+	ViewTaskList ViewState = iota
+	ViewTimerActive
+	ViewTimerDone
+	ViewQuitting
+)
+
 // model is the Bubbletea model for the TUI.
 type model struct {
 	list          list.Model
-	quitting      bool
-	timerActive   bool
+	activeView    ViewState
 	timer         time.Duration
 	timerTotal    time.Duration
 	timerTask     TaskItem
-	timerDone     bool
 	sessionRunner interface{} // session.SessionRunner, but avoid import cycle
 	sessionState  *state.TimeBoxState
 	gitWatcher    interface{} // gitwatcher.GitWatcher, but avoid import cycle
@@ -77,6 +86,7 @@ func initialModel(tasks []TaskItem, markdownFile string, height int, stateMgr co
 		states:      states,
 		commitTable: t,
 		commits:     []string{},
+		activeView:  ViewTaskList,
 	}
 	return m
 }

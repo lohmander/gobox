@@ -57,9 +57,9 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		k := msg.String()
 		if k == "ctrl+c" || k == "q" {
-			m.quitting = true
+			m.activeView = ViewQuitting
 			// Only attempt to stop the session runner if we're in an active timer
-			if m.timerActive {
+			if m.activeView == ViewTimerActive {
 				if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
 					runner.Stop()
 				}
@@ -68,12 +68,11 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		if k == "enter" && m.timerActive {
+		if k == "enter" && m.activeView == ViewTimerActive {
 			// Complete timer early when enter is pressed during active timer
 			if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
 				runner.Complete()
-				m.timerActive = false
-				m.timerDone = true
+				m.activeView = ViewTimerDone
 				return m, nil
 			}
 		}
@@ -92,7 +91,7 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 	case tickMsg:
 		// Update timer display
 		if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
-			if !m.timerDone {
+			if m.activeView != ViewTimerDone {
 				// For duration-based timers, count down
 				if m.timerTotal > 0 {
 					elapsed := runner.TotalElapsed()
@@ -114,8 +113,7 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 		})
 
 	case sessionCompletedMsg:
-		m.timerActive = false
-		m.timerDone = true
+		m.activeView = ViewTimerDone
 
 		// Save state when timer is completed
 		if m.sessionState != nil {
@@ -190,13 +188,13 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.timerActive {
+		if m.activeView == ViewTimerActive {
 			switch msg.String() {
 			case "ctrl+c", "q":
-				m.quitting = true
+				m.activeView = ViewQuitting
 				if runner, ok := m.sessionRunner.(*session.SessionRunner); ok && runner != nil {
 					// Safe stop that won't panic if channels are closed
-					if m.timerActive {
+					if m.activeView == ViewTimerActive {
 						runner.Stop()
 					}
 				}
@@ -209,7 +207,7 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 				}
 				return m, nil
 			}
-		} else if m.timerDone {
+		} else if m.activeView == ViewTimerDone {
 			// Task is already completed in sessionCompletedMsg handler
 			// Here we just handle returning to the task list
 
@@ -231,7 +229,7 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 					}
 
 					// Get commits for the task duration
-					
+
 					commitsDuringTask, _ := func() ([]string, error) {
 						var allCommits []string
 						commitSet := make(map[string]struct{})
@@ -253,7 +251,7 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 						}
 						return allCommits, nil
 					}()
-					
+
 					// Update the markdown file
 					updatedTask := m.timerTask.task
 					updatedTask.IsChecked = true
@@ -272,7 +270,7 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 					m.sessionState = nil
 				}
 
-				m.timerDone = false
+				m.activeView = ViewTaskList
 			default:
 				return m, nil
 			}
@@ -316,7 +314,7 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 					}
 				}
 				_ = m.stateMgr.Save(m.states)
-				m.quitting = true
+				m.activeView = ViewQuitting
 				return m, tea.Quit
 
 			case "enter":
@@ -365,8 +363,7 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 
 						// Set up timer
 						m.timerTask = item
-						m.timerActive = true
-						m.timerDone = false
+						m.activeView = ViewTimerActive
 
 						// Initialize session runner
 						runner := session.NewSessionRunner(item.task, m.sessionState, duration, endTime)
@@ -455,7 +452,7 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 	}
 
 	// Forward key events to the list when not in timer mode
-	if !m.timerActive && !m.timerDone {
+	if m.activeView == ViewTaskList {
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
 		return m, cmd

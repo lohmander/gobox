@@ -9,17 +9,18 @@ import (
 
 // ModelView renders the TUI model's view as a string.
 func ModelView(m model) string {
-	if m.quitting {
+	switch m.activeView {
+	case ViewQuitting:
 		return quittingView()
-	}
-	if m.timerActive {
+	case ViewTimerActive:
 		return timerView(m)
-	}
-	if m.timerDone {
+	case ViewTimerDone:
 		return completionView()
+	case ViewTaskList:
+		return taskListView(m)
+	default:
+		return taskListView(m)
 	}
-
-	return taskListView(m)
 }
 
 func quittingView() string {
