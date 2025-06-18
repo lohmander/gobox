@@ -24,15 +24,16 @@ func extractTextSkippingNode(n ast.Node, skip ast.Node, content []byte, builder 
 		return
 	}
 
-	if t, ok := n.(*ast.Text); ok {
+	switch t := n.(type) {
+	case *ast.Text:
 		builder.Write(t.Segment.Value(content))
 		return
-	}
 
-	if t, ok := n.(*ast.Paragraph); ok {
+	case *ast.Paragraph:
 		for range t.Lines().Len() {
 			builder.Write([]byte("\n"))
 		}
+
 	}
 
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
@@ -118,9 +119,7 @@ func ParseTimeBox(timeBox string) (time.Duration, time.Time, error) {
 	}
 
 	// Remove the leading '@' if present
-	if strings.HasPrefix(timeBox, "@") {
-		timeBox = timeBox[1:]
-	}
+	timeBox = strings.TrimPrefix(timeBox, "@")
 
 	// Check for time range syntax: [HH:MM-HH:MM]
 	if strings.HasPrefix(timeBox, "[") && strings.HasSuffix(timeBox, "]") {
