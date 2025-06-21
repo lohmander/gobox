@@ -115,32 +115,11 @@ type model struct {
 	lastTickTime time.Time
 }
 
-// refactor out the logic to initialize the list into a separate method AI!
 
-// InitialModel creates the initial TUI model.
 func InitialModel(tasks []TaskItem, markdownFile string, height int, stateMgr core.StateStore, states []state.TimeBoxState) model {
-	items := make([]list.Item, len(tasks))
-	for i, t := range tasks {
-		ti := t
-		// Set initial width to default 80 - padding
-		ti.SetWidth(76)
-		items[i] = ti
-	}
-	// Use a default height and width if not set yet
-	listHeight := max(height-12, 5)
-	defaultWidth := 80
-	// Use multilineDelegate instead of default delegate
-	listDelegate := &multilineDelegate{
-		titleStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00FFFF")),
-		descStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")),
-	}
-	listDelegate.ShowDescription = false
-	l := list.New(items, listDelegate, defaultWidth, listHeight)
-	// Remove default quit keys so we handle q/ctrl+c ourselves
-	l.Title = markdownFile // Store the file path in the title for reloads
-	// Initialize the commit table with a single column for commit messages
+	l := initList(tasks, markdownFile, height)
 	columns := []table.Column{
-		{Title: "Commit", Width: defaultWidth - 4},
+		{Title: "Commit", Width: 80 - 4},
 	}
 	t := table.New(
 		table.WithColumns(columns),
@@ -148,11 +127,10 @@ func InitialModel(tasks []TaskItem, markdownFile string, height int, stateMgr co
 		table.WithFocused(false),
 		table.WithHeight(10),
 	)
-
 	m := model{
 		list:        l,
 		height:      height,
-		width:       defaultWidth,
+		width:       80,
 		stateMgr:    stateMgr,
 		States:      states,
 		commitTable: t,
@@ -162,10 +140,29 @@ func InitialModel(tasks []TaskItem, markdownFile string, height int, stateMgr co
 	return m
 }
 
-// max returns the maximum of two ints.
 func max(a, b int) int {
 	if a > b {
 		return a
 	}
 	return b
+}
+
+// initList initializes a list.Model from the given tasks, markdown file path, and height.
+func initList(tasks []TaskItem, markdownFile string, height int) list.Model {
+	items := make([]list.Item, len(tasks))
+	for i, t := range tasks {
+		ti := t
+		ti.SetWidth(76)
+		items[i] = ti
+	}
+	listHeight := max(height-12, 5)
+	defaultWidth := 80
+	listDelegate := &multilineDelegate{
+		titleStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00FFFF")),
+		descStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")),
+	}
+	listDelegate.ShowDescription = false
+	l := list.New(items, listDelegate, defaultWidth, listHeight)
+	l.Title = markdownFile
+	return l
 }
