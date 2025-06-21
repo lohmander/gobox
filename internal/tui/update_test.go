@@ -32,10 +32,10 @@ func (d dummyStateMgr) RemoveTaskState(states []state.TimeBoxState, taskHash str
 
 func TestHandleSessionCompletedMsg_ReloadsTasks(t *testing.T) {
 	// Create a temporary markdown file with two tasks.
-	markdownContent := ` + "`" + `
+	markdownContent := `
 - [ ] Task A @10m
 - [x] Task B @15m
-` + "`" + `
+`
 	tmpFile, err := os.CreateTemp("", "test_tasks_*.md")
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
