@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
-	"gobox/internal/core" // Import our new internal/core package
+	"gobox/internal/core" // For state store initialization
+	"gobox/internal/tui"
 )
 
 // rootCmd represents the base command when called without any subcommands
