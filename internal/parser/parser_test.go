@@ -9,6 +9,11 @@ import (
 
 	"gobox/internal/parser"
 	"gobox/pkg/task"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/text"
 )
 
 func TestParseMarkdownFile(t *testing.T) {
@@ -106,6 +111,42 @@ func TestParseMarkdownFile(t *testing.T) {
 				t.Errorf("ParseMarkdownFile() got = %T %v, want %T %v", got, got, tt.want, tt.want)
 			}
 		})
+	}
+}
+
+func TestExtractTaskInline(t *testing.T) {
+	// Markdown content with inline elements: a link, emphasis, and code span
+	mdContent := `
+- [ ] a task that [links to docs](#doc) and *emphasized text* with ` + "`some code`" + ` @1h30m
+`
+	mdContent = strings.TrimSpace(mdContent)
+
+	md := goldmark.New(goldmark.WithExtensions(extension.TaskList))
+	reader := text.NewReader([]byte(mdContent))
+	rootNode := md.Parser().Parse(reader)
+
+	var extractedTask *task.Task
+	ast.Walk(rootNode, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			if taskItem, ok := parser.ExtractTask(n, []byte(mdContent)); ok {
+				extractedTask = taskItem
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+
+	if extractedTask == nil {
+		t.Fatal("failed to extract task")
+	}
+
+	expectedDescription := "a task that [links to docs] and *emphasized text* with `some code`"
+	if extractedTask.Description != expectedDescription {
+		t.Errorf("expected description %q, got %q", expectedDescription, extractedTask.Description)
+	}
+
+	expectedTimeBox := "@1h30m"
+	if extractedTask.TimeBox != expectedTimeBox {
+		t.Errorf("expected timebox %q, got %q", expectedTimeBox, extractedTask.TimeBox)
 	}
 }
 
