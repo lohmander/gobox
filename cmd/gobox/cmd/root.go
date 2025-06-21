@@ -18,10 +18,13 @@ var rootCmd = &cobra.Command{
 updates the markdown upon completion with a checkmark and Git commits.`,
 	Args: cobra.ExactArgs(1), // Expect exactly one argument: the markdown file path
 	Run: func(cmd *cobra.Command, args []string) {
-		markdownFile := args[0] // Get the markdown file path from Cobra arguments
-
-		// Call the main application logic from the internal/core package
-		core.StartGoBox(markdownFile)
+		markdownFile := args[0]
+		stateMgr := core.NewFileStateStore(".gobox_state.json")
+		states, _ := stateMgr.Load()
+		if err := tui.Run(markdownFile, stateMgr, states); err != nil {
+			fmt.Println("Error running TUI:", err)
+			os.Exit(1)
+		}
 	},
 }
 
