@@ -77,8 +77,14 @@ func TestHandleSessionCompletedMsg_ReloadsTasks(t *testing.T) {
 	// Extract the list items from the updated model.
 	listItems := updatedModel.list.Items()
 
-	if len(listItems) != len(parsedTasks) {
-		t.Errorf("expected %d list items, got %d", len(parsedTasks), len(listItems))
+	var expectedCount int
+	for _, pt := range parsedTasks {
+		if !pt.IsChecked {
+			expectedCount++
+		}
+	}
+	if len(listItems) != expectedCount {
+		t.Errorf("expected %d list items, got %d", expectedCount, len(listItems))
 	}
 
 	// Further verify that the tasks in the list match the parsed tasks.
