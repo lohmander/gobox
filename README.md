@@ -26,13 +26,31 @@ The core idea is to allocate focused time blocks to specific tasks. `GoBox` then
 
 * **CLI Argument Handling:** Utilizes `spf13/cobra` for processing command-line arguments.
 
-## 🛠️ Installation (Coming Soon)
+## 🛠️ Installation
 
-*(Once the project is more mature, this section will contain detailed installation instructions, likely involving `go install` or `make install`.)*
+Install GoBox using `go install`:
 
-## 🚀 Usage (Coming Soon)
+```bash
+go install github.com/yourusername/gobox@latest
+```
 
-*(This section will provide simple command examples once the core features are fully integrated and stable.)*
+Alternatively, you can build from source:
+
+```bash
+git clone https://github.com/yourusername/gobox.git
+cd gobox
+make build
+```
+
+## 🚀 Usage
+
+To start GoBox, simply run:
+
+```bash
+gobox
+```
+
+For more detailed usage instructions, please refer to the documentation in the `docs/` directory.
 
 ## 🛣️ Future Enhancements
 
