@@ -34,6 +34,13 @@ func extractTextSkippingNode(n ast.Node, skip ast.Node, content []byte, builder 
 			builder.Write([]byte("\n"))
 		}
 
+	case *ast.CodeSpan:
+		builder.Write([]byte("`"))
+		for range t.Lines().Len() {
+			builder.Write([]byte("\n"))
+		}
+		builder.Write([]byte("`"))
+
 	}
 
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
