@@ -52,7 +52,7 @@ func extractTextSkippingNode(n ast.Node, skip ast.Node, content []byte, builder 
 
 	case *ast.CodeSpan:
 		builder.WriteString("`")
-		builder.Write(t.Segment.Value(content))
+		builder.Write(t.Text(content))
 		builder.WriteString("`")
 		return
 	}
