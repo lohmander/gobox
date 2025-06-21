@@ -16,7 +16,7 @@ import (
 // TestCompletionScreenConfirmTriggersMarkdownUpdate tests that pressing enter or space on the completion screen
 // marks the task as completed and updates the markdown file accordingly.
 func TestCompletionScreenConfirmTriggersMarkdownUpdate(t *testing.T) {
-	markdownContent := "- [ ] Sample Test Task for `some work` @1m\n"
+	markdownContent := "- [ ] Sample Test Task for some work @1m\n"
 	tmpFile, err := os.CreateTemp("", "gobox_tui_test_*.md")
 	if err != nil {
 		t.Fatalf("failed to create temp markdown file: %v", err)
@@ -75,7 +75,7 @@ func TestCompletionScreenConfirmTriggersMarkdownUpdate(t *testing.T) {
 	}
 	updatedStr := string(updatedContent)
 
-	if !strings.Contains(updatedStr, "[x] Sample Test Task @1m") {
+	if !strings.Contains(updatedStr, "[x] Sample Test Task for some work @1m") {
 		t.Errorf("Task was not marked as completed in markdown:\n%s", updatedStr)
 	}
 	if !strings.Contains(updatedStr, "⏱️") {
