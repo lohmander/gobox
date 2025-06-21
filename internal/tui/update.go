@@ -368,6 +368,18 @@ func handleSessionCompletedMsg(m model, _ sessionCompletedMsg) (model, tea.Cmd) 
 		}()
 
 		_ = m.stateMgr.Save(m.States)
+		tasks, err := parser.ParseMarkdownFile(m.list.Title)
+		if err == nil {
+			var items []list.Item
+			for _, t := range tasks {
+				items = append(items, TaskItem{
+					RawLine: t.String(),
+					Task:    t,
+					Width:   m.width - 4,
+				})
+			}
+			m.list.SetItems(items)
+		}
 	}
 	return m, nil
 }
