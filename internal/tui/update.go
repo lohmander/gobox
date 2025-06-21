@@ -21,8 +21,7 @@ import (
 type tickMsg struct{}
 type sessionCompletedMsg struct{}
 type commitMsg string
-type reinitModelMsg struct{}
-
+type reloadListMsg struct{}
 
 // sessionTickCmd returns a Bubbletea command that listens for session runner events.
 func sessionTickCmd(runner *session.SessionRunner) tea.Cmd {
@@ -56,6 +55,8 @@ func Update(m model, msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return HandleKeyMsg(m, msg)
+	case reloadListMsg:
+		return handleReloadListMsg(m, msg)
 	case tickMsg:
 		return handleTickMsg(m, msg)
 	case sessionCompletedMsg:
@@ -300,6 +301,10 @@ func HandleKeyMsg(m model, msg tea.KeyMsg) (model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func handleReloadListMsg(m model, _ reloadListMsg) (model, tea.Cmd) {
+	// implement this by parsing the markdown file again, and using initList from tui/model.go refresh the list in the `m` model AI!
 }
 
 func handleTickMsg(m model, _ tickMsg) (model, tea.Cmd) {
