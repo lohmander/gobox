@@ -1,10 +1,8 @@
 # GoBox: Timeboxing with Git Accountability
 
-## 🚀 What is GoBox?
+## What is GoBox?
 
-`GoBox` is a command-line interface (CLI) tool built in Go. Its purpose is to assist developers and individuals in applying **timeboxing** directly within their Markdown-based task lists. It integrates with your Git repository to provide a record of activity during timeboxed sessions.
-
-The core idea is to allocate focused time blocks to specific tasks. `GoBox` then automatically records the Git commits made during that period, offering a way to track progress and maintain focus.
+GoBox is a simple CLI tool written in Go that supports a basic timeboxing workflow for tasks in Markdown files. It works with your Git repository to log commits made during a work session, helping you review your progress without any fuss.
 
 ## ✨ Goals
 
@@ -44,13 +42,13 @@ make build
 
 ## 🚀 Usage
 
-To start GoBox, simply run:
+To run GoBox, just type:
 
 ```bash
 gobox
 ```
 
-For more detailed usage instructions, please refer to the documentation in the `docs/` directory.
+For more info, check the docs in the `docs/` directory.
 
 ## 🛣️ Future Enhancements
 
