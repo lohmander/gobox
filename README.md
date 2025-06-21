@@ -32,13 +32,13 @@ GoBox is a simple CLI tool written in Go that supports a basic timeboxing workfl
 Install GoBox using `go install`:
 
 ```bash
-go install github.com/yourusername/gobox@latest
+go install github.com/lohmander/gobox@latest
 ```
 
 Alternatively, you can build from source:
 
 ```bash
-git clone https://github.com/yourusername/gobox.git
+git clone https://github.com/lohmander/gobox.git
 cd gobox
 make build
 ```
