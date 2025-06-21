@@ -11,11 +11,14 @@ import (
 	"gobox/internal/state"
 
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbletea"
 )
 
 // dummyStateMgr is a testing stub for the core.StateStore interface.
 type dummyStateMgr struct{}
+
+func (d dummyStateMgr) Load() ([]state.TimeBoxState, error) {
+	return nil, nil
+}
 
 func (d dummyStateMgr) Save(states []state.TimeBoxState) error {
 	return nil
@@ -50,7 +53,7 @@ func TestHandleSessionCompletedMsg_ReloadsTasks(t *testing.T) {
 
 	// Initialize the model using InitialModel with an empty tasks slice.
 	// The list title will store the markdown file path.
-	initialTasks := []list.Item{}
+	initialTasks := []TaskItem{}
 	height := 40
 	states := []state.TimeBoxState{}
 	sm := dummyStateMgr{}
