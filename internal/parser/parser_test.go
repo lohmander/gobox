@@ -76,6 +76,17 @@ func TestParseMarkdownFile(t *testing.T) {
 			want:     []task.Task{},
 			wantErr:  false,
 		},
+		{
+			name:     "inline code",
+			markdown: "- [ ] Task with `code` @1h",
+			want: []task.Task{
+				{
+					Description: "Task with `code`",
+					TimeBox:     "@1h",
+					IsChecked:   false,
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
