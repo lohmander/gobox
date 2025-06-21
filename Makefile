@@ -22,4 +22,12 @@ clean:
 	@echo "Cleaning build directory..."
 	rm -rf $(BUILD_DIR)
 
+aider:
+	aider \
+	--api-key openai=$$OPENAI_KEY \
+	--model o3-mini \
+	--test-cmd 'make test' \
+	--auto-test \
+	--watch-files
+
 .PHONY: all build install clean
