@@ -4,6 +4,8 @@
 
 GoBox is a simple CLI tool written in Go that supports a basic timeboxing workflow for tasks in Markdown files. It works with your Git repository to log commits made during a work session, helping you review your progress without any fuss.
 
+![Gobox TUI](docs/images/gobox_demo.gif)
+
 ## ✨ Goals
 
 * **Improve Focus:** Support dedicated work on a single task for a set duration.
