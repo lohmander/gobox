@@ -158,8 +158,7 @@ func HandleKeyMsg(m model, msg tea.KeyMsg) (model, tea.Cmd) {
 			}
 
 			m.ActiveView = ViewTaskList
-			// trigger a list reload here AI!
-			return m, nil
+			return m, func() tea.Msg { return reloadListMsg{} }
 
 		default:
 			return m, nil
