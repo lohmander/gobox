@@ -372,11 +372,14 @@ func handleSessionCompletedMsg(m model, _ sessionCompletedMsg) (model, tea.Cmd) 
 		if err == nil {
 			var items []list.Item
 			for _, t := range tasks {
-				items = append(items, TaskItem{
-					RawLine: t.String(),
-					Task:    t,
-					Width:   m.width - 4,
-				})
+				// Exclude the completed task from the reloaded list.
+				if !t.IsChecked {
+					items = append(items, TaskItem{
+						RawLine: t.String(),
+						Task:    t,
+						Width:   m.width - 4,
+					})
+				}
 			}
 			m.list.SetItems(items)
 		}
