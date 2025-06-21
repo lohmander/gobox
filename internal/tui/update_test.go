@@ -53,7 +53,7 @@ func TestHandleSessionCompletedMsg_ReloadsTasks(t *testing.T) {
 	initialTasks := []TaskItem{}
 	height := 40
 	states := []state.TimeBoxState{}
-	sm := dummyStateMgr{}
+	sm := &dummyStateMgr{}
 	m := InitialModel(initialTasks, tmpFile.Name(), height, sm, states)
 
 	// Set a non-nil SessionState to trigger the reload branch in handleSessionCompletedMsg.
