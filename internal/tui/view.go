@@ -3,7 +3,9 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -44,12 +46,20 @@ func timerView(m model) string {
 	}
 
 	timerStyle := lipgloss.NewStyle().Foreground(timerColor).Bold(true)
+	
+	progressPercent := 0.0
+	if m.timerTotal > 0 {
+		progressPercent = 1.0 - (float64(m.timer) / float64(m.timerTotal))
+	}
+	pb := progress.New(progress.WithDefaultGradient(), progress.WithWidth(40))
+	progressBar := pb.ViewAs(progressPercent)
 
 	timerBlock := lipgloss.NewStyle().Padding(1).BorderStyle(lipgloss.RoundedBorder()).Render(
 		fmt.Sprintf(
-			"%s\n%s\n\nPress Enter to complete early or q/Ctrl+C to quit.",
+			"%s\n%s\n%s\n\nPress Enter to complete early or q/Ctrl+C to quit.",
 			headerStyle.Render("Working on: ")+m.TimerTask.Title(),
 			headerStyle.Render("Time remaining: ")+timerStyle.Render(timeStr),
+			progressBar,
 		),
 	)
 	commitsBlock := lipgloss.NewStyle().Padding(1).Render(headerStyle.Render("Commits during session:"))
