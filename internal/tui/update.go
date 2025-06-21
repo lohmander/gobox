@@ -23,7 +23,6 @@ type sessionCompletedMsg struct{}
 type commitMsg string
 type reinitModelMsg struct{}
 
-// reinit the model when being passed the reinitModelMsg AI!
 
 // sessionTickCmd returns a Bubbletea command that listens for session runner events.
 func sessionTickCmd(runner *session.SessionRunner) tea.Cmd {
