@@ -304,7 +304,21 @@ func HandleKeyMsg(m model, msg tea.KeyMsg) (model, tea.Cmd) {
 }
 
 func handleReloadListMsg(m model, _ reloadListMsg) (model, tea.Cmd) {
-	// implement this by parsing the markdown file again, and using initList from tui/model.go refresh the list in the `m` model AI!
+	tasks, err := parser.ParseMarkdownFile(m.list.Title)
+	if err == nil {
+		var taskItems []TaskItem
+		for _, t := range tasks {
+			if !t.IsChecked {
+				taskItems = append(taskItems, TaskItem{
+					RawLine: t.String(),
+					Task:    t,
+					Width:   m.width - 4,
+				})
+			}
+		}
+		m.list = initList(taskItems, m.list.Title, m.height)
+	}
+	return m, nil
 }
 
 func handleTickMsg(m model, _ tickMsg) (model, tea.Cmd) {
