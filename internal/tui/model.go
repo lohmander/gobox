@@ -115,6 +115,8 @@ type model struct {
 	lastTickTime time.Time
 }
 
+// refactor out the logic to initialize the list into a separate method AI!
+
 // InitialModel creates the initial TUI model.
 func InitialModel(tasks []TaskItem, markdownFile string, height int, stateMgr core.StateStore, states []state.TimeBoxState) model {
 	items := make([]list.Item, len(tasks))
