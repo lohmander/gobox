@@ -30,17 +30,31 @@ func extractTextSkippingNode(n ast.Node, skip ast.Node, content []byte, builder 
 		return
 
 	case *ast.Paragraph:
-		for range t.Lines().Len() {
+		for i := 0; i < t.Lines().Len(); i++ {
 			builder.Write([]byte("\n"))
 		}
+
+	case *ast.Link:
+		builder.WriteString("[")
+		for c := t.FirstChild(); c != nil; c = c.NextSibling() {
+			extractTextSkippingNode(c, skip, content, builder)
+		}
+		builder.WriteString("]")
+		return
+
+	case *ast.Emphasis:
+		builder.WriteString("*")
+		for c := t.FirstChild(); c != nil; c = c.NextSibling() {
+			extractTextSkippingNode(c, skip, content, builder)
+		}
+		builder.WriteString("*")
+		return
 
 	case *ast.CodeSpan:
-		builder.Write([]byte("`"))
-		for range t.Lines().Len() {
-			builder.Write([]byte("\n"))
-		}
-		builder.Write([]byte("`"))
-
+		builder.WriteString("`")
+		builder.Write(t.Segment.Value(content))
+		builder.WriteString("`")
+		return
 	}
 
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
