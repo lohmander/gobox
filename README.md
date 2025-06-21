@@ -48,7 +48,7 @@ make build
 To run GoBox, just type:
 
 ```bash
-gobox
+gobox mytasks.md
 ```
 
 For more info, check the docs in the `docs/` directory.
