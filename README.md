@@ -54,10 +54,6 @@ For more info, check the docs in the `docs/` directory.
 
 Planned enhancements for `GoBox` include:
 
-* Improved console UI with `charmbracelet/bubbles` (e.g., progress bars, dynamic commit lists).
-* Interactive task selection from the terminal.
-* Support for resuming interrupted sessions (persistent state).
 * Enhanced parsing for nested tasks in Markdown.
-* Visual indicators for overdue tasks.
 * Optional audio cues for timer completion.
 * Potential macOS status bar integration.
