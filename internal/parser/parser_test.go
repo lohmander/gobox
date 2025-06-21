@@ -139,7 +139,7 @@ func TestExtractTaskInline(t *testing.T) {
 		t.Fatal("failed to extract task")
 	}
 
-	expectedDescription := "a task that [links to docs] and *emphasized text* with `some code`"
+	expectedDescription := "a task that [links to docs](#doc) and *emphasized text* with `some code`"
 	if extractedTask.Description != expectedDescription {
 		t.Errorf("expected description %q, got %q", expectedDescription, extractedTask.Description)
 	}

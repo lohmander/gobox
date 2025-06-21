@@ -40,6 +40,11 @@ func extractTextSkippingNode(n ast.Node, skip ast.Node, content []byte, builder 
 			extractTextSkippingNode(c, skip, content, builder)
 		}
 		builder.WriteString("]")
+		if t.Destination != nil {
+			builder.WriteString("(")
+			builder.Write(t.Destination)
+			builder.WriteString(")")
+		}
 		return
 
 	case *ast.Emphasis:
