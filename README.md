@@ -61,6 +61,3 @@ Planned enhancements for `GoBox` include:
 * Enhanced parsing for nested tasks in Markdown.
 * Optional audio cues for timer completion.
 * Potential macOS status bar integration.
-
-
-add gif
