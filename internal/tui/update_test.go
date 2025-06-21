@@ -92,8 +92,9 @@ func TestHandleSessionCompletedMsg_ReloadsTasks(t *testing.T) {
 
 	var expectedTasks []string
 	for _, pt := range parsedTasks {
-		// Using the task's String() method for expected text.
-		expectedTasks = append(expectedTasks, pt.String())
+		if !pt.IsChecked {
+			expectedTasks = append(expectedTasks, pt.String())
+		}
 	}
 
 	if !reflect.DeepEqual(reloadedTasks, expectedTasks) {
