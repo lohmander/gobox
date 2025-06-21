@@ -9,21 +9,18 @@ import (
 
 	"gobox/internal/parser"
 	"gobox/internal/state"
-
-	"github.com/charmbracelet/bubbles/list"
 )
 
-// dummyStateMgr is a testing stub for the core.StateStore interface.
 type dummyStateMgr struct{}
 
-func (d dummyStateMgr) Load() ([]state.TimeBoxState, error) {
+func (d *dummyStateMgr) Load() ([]state.TimeBoxState, error) {
 	return nil, nil
 }
 
-func (d dummyStateMgr) Save(states []state.TimeBoxState) error {
+func (d *dummyStateMgr) Save(states []state.TimeBoxState) error {
 	return nil
 }
-func (d dummyStateMgr) RemoveTaskState(states []state.TimeBoxState, taskHash string) []state.TimeBoxState {
+func (d *dummyStateMgr) RemoveTaskState(states []state.TimeBoxState, taskHash string) []state.TimeBoxState {
 	var newStates []state.TimeBoxState
 	for _, s := range states {
 		if s.TaskHash != taskHash {
