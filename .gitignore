@@ -26,3 +26,4 @@ go.work.sum
 build
 test.md
 .gobox_state.json
+.aider*
